@@ -68,7 +68,7 @@ bool contains(uint64_t item) {
 int main() {
 
 	if (me() == 0) {
-		printf("DPU running\n");
+		dpu_printf("DPU running\n");
 	}
 
 	perfcounter_config(COUNT_CYCLES, true);
@@ -80,10 +80,10 @@ int main() {
 			blooma_starts[me()] = &blooma[MAX_BLOOM_DPU_SIZE * me()];
 			memset(blooma_starts[me()], 0, ((1 << _dpu_size2) >> 3) * sizeof(unsigned char));
 			if (me() == 0) {
-				printf("Filter size2 is = %lu\n", _dpu_size2);
+				dpu_printf("Filter size2 is = %lu\n", _dpu_size2);
 				_dpu_size_reduced = (1 << _dpu_size2) - 1;
 			}
-			// printf("[%02d] My Bloom start adress is %p\n", me(), blooma_starts[me()]);
+			// dpu_printf("[%02d] My Bloom start adress is %p\n", me(), blooma_starts[me()]);
 			break;
 		
 		} case INSERT: {
@@ -92,7 +92,7 @@ int main() {
 			for (int i = 0; i < nb_items; i++) {
 				uint64_t item = items[1 + i];
 				if ((item & 15) == me()) {
-					// printf("Inserting = %lu\n", item);
+					// dpu_printf("Inserting = %lu\n", item);
 					for (size_t k = 0; k < _nb_hash; k++) {
 						uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
 						mram_update_byte_atomic(&blooma_starts[me()][h0 >> 3], insert_atomic, bit_mask[h0 & 7]);
@@ -110,14 +110,14 @@ int main() {
 				if ((item & 15) == me()) {
 					bool result = contains(item);
 					nb_positive_lookups[me()] += result;
-					printf("%d", result);
+					dpu_printf("%d", result);
 				}
 			}
 
 			barrier_wait(&end_lookup_barrier);
 			
 			if (me() == 0) {
-				printf("\n");
+				dpu_printf("\n");
 				total_nb_positive_lookups = 0;
 				for (size_t t = 0; t < NR_TASKLETS; t++) {
 					total_nb_positive_lookups += nb_positive_lookups[t];

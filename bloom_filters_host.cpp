@@ -12,7 +12,7 @@
 
 #include "bloom_filters_common.h"
 
-#define USE_DPU_SIMULATOR
+// #define USE_DPU_SIMULATOR
 
 #ifdef USE_DPU_SIMULATOR
 	#define DPU_PROFILE "backend=simulator"
@@ -23,13 +23,13 @@
 using namespace std;
 using namespace dpu;
 
-#define NB_DPU 1
+#define NB_DPU 16
 #define NB_THREADS 8
 
-#define NB_ITEMS (1 << 10)
-#define NB_NO_ITEMS 500
+#define NB_ITEMS 1600000
+#define NB_NO_ITEMS 1000
 #define NB_HASH 8
-#define BLOOM_SIZE2 11
+#define BLOOM_SIZE2 24
 
 #define BLOOM_SIZE (1 << BLOOM_SIZE2)
 
@@ -83,13 +83,14 @@ public:
 
 	enum Implementation {
 		BASIC,
+		BASIC_CACHE_ITEMS,
 	};
 
     PimBloomFilter(size_t nb_dpu, size_t size2, uint32_t nb_hash = 4, Implementation implem = BASIC) : _nb_dpu(nb_dpu), _size2(size2), _nb_hash(nb_hash), _hash_functions(nb_hash) {
 		
 		_size = (1 << _size2);
 		_size_reduced = _size - 1;
-		_dpu_size2 = ceil(log(_size / NB_DPU) / log(2));
+		_dpu_size2 = ceil(log(_size / (NB_DPU * 16)) / log(2));
 		
 		if (_dpu_size2 > MAX_BLOOM_DPU_SIZE2) {
 			throw invalid_argument(
@@ -108,7 +109,6 @@ public:
 		DPU_ASSERT(dpu_broadcast_to(_set, "_nb_hash", 0, &_nb_hash, sizeof(_nb_hash), DPU_XFER_DEFAULT));
 		
 		launch_dpu(INIT);
-		read_dpu_log();
 		
 	}
 
@@ -132,12 +132,12 @@ public:
 			if (buckets[bucket_idx][0] == MAX_NB_ITEMS_PER_DPU) {
 
 				// Launch
+				prepare_dpu_launch_async();
 				DPU_FOREACH(_set, _dpu, _dpu_idx) {
 					DPU_ASSERT(dpu_prepare_xfer(_dpu, buckets[_dpu_idx]));
 				}
 				DPU_ASSERT(dpu_push_xfer(_set, DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * ((MAX_NB_ITEMS_PER_DPU + 1 + 7) >> 3) << 3, DPU_XFER_DEFAULT));
-				launch_dpu(INSERT);
-				read_dpu_log();
+				launch_dpu_async(INSERT);
 
 				// Reset buckets
 				for (size_t d = 0; d < _nb_dpu; d++) {
@@ -155,7 +155,6 @@ public:
 		}
 		DPU_ASSERT(dpu_push_xfer(_set, DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * ((MAX_NB_ITEMS_PER_DPU + 1 + 7) >> 3) << 3, DPU_XFER_DEFAULT));
 		launch_dpu(INSERT);
-		read_dpu_log();
 	}
 
 	uint32_t contains(std::vector<u_int64_t> items) {
@@ -218,6 +217,8 @@ private:
 
 	const char* get_dpu_binary_name(Implementation implem) {
 		switch (implem) {
+			case BASIC_CACHE_ITEMS:
+				return "bloom_filters_dpu2"; 
 			default:
 				return "bloom_filters_dpu1";
 		}
@@ -226,12 +227,25 @@ private:
 	void launch_dpu(enum BloomMode mode) {
 		DPU_ASSERT(dpu_broadcast_to(_set, "_mode", 0, &mode, sizeof(mode), DPU_XFER_DEFAULT));
 		DPU_ASSERT(dpu_launch(_set, DPU_SYNCHRONOUS));
+		read_dpu_log();
+	}
+
+	void prepare_dpu_launch_async() {
+		DPU_ASSERT(dpu_sync(_set));
+		read_dpu_log();
+	}
+
+	void launch_dpu_async(enum BloomMode mode) {
+		DPU_ASSERT(dpu_broadcast_to(_set, "_mode", 0, &mode, sizeof(mode), DPU_XFER_DEFAULT));
+		DPU_ASSERT(dpu_launch(_set, DPU_ASYNCHRONOUS));
 	}
 
 	void read_dpu_log() {
+		#ifdef LOG_DPU
 		DPU_FOREACH(_set, _dpu) {
 			DPU_ASSERT(dpu_log_read(_dpu, stdout));
 		}
+		#endif
 	}
 
 	uint32_t launch_lookups(std::vector<u_int64_t*>& buckets) {
@@ -240,7 +254,6 @@ private:
 		}
 		DPU_ASSERT(dpu_push_xfer(_set, DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * ((MAX_NB_ITEMS_PER_DPU + 1 + 7) >> 3) << 3, DPU_XFER_DEFAULT));
 		launch_dpu(LOOKUP);
-		read_dpu_log();
 
 		uint32_t total_nb_positive_lookups = 0, nb_positive_lookups[_nb_dpu];
 		DPU_FOREACH(_set, _dpu, _dpu_idx) {
@@ -257,8 +270,6 @@ private:
 
 int main() {
 
-	clock_t start = clock();
-
 	// Prepare items
 	std::vector<u_int64_t> items(NB_ITEMS);
 	for (int i = 0; i < NB_ITEMS; i++) {
@@ -271,21 +282,25 @@ int main() {
 	}
 
 	try {
-		// Testing lookup results
-		uint32_t nb_positive_lookups;
-		PimBloomFilter *bloom_filter = new PimBloomFilter(NB_DPU, BLOOM_SIZE2, NB_HASH);
-		bloom_filter->insert(items);
+		
 
+		clock_t start = clock();
+		PimBloomFilter *bloom_filter = new PimBloomFilter(NB_DPU, BLOOM_SIZE2, NB_HASH, PimBloomFilter::BASIC_CACHE_ITEMS);
+		bloom_filter->insert(items);
+		clock_t end = clock();
+		cout << "Host elapsed time for insertions = " << (double) (end - start) / CLOCKS_PER_SEC << " seconds" << endl;
+
+		// Checking absence of false negative
 		auto rng = std::default_random_engine {};
 		std::shuffle(std::begin(items), std::end(items), rng);
-
-		nb_positive_lookups = bloom_filter->contains(items);
+		uint32_t nb_positive_lookups = bloom_filter->contains(items);
 		if (nb_positive_lookups == items.size()) {
 			cout << "[OK] All items inserted give a positive" << endl;
 		} else {
-			cout << "[WARNING] There is " << items.size() - nb_positive_lookups << " false negative(s)" << endl;
+			cout << "[WARNING] There is " << items.size() - nb_positive_lookups << " false negative(s) / " << items.size() << endl;
 		}
 
+		// Computing false positive frequency
 		nb_positive_lookups = bloom_filter->contains(no_items);
 		cout << "False positive frequency is " << (double) nb_positive_lookups / no_items.size() << endl;
 		cout << "Reference false positive probability is " << bloom_filter->get_reference_false_positive_probability(items.size()) << endl;
@@ -295,12 +310,6 @@ int main() {
         cerr << e.what() << endl;
         return -1;
     }
-
-	
-
-	clock_t end = clock();
-	printf("Host elapsed time: %.2e secs.\n", (double)(end - start) / CLOCKS_PER_SEC);
-
 
 	// for (int repeat = 0; repeat < NB_REPEATS; repeat++) {}
 	// uint32_t each_dpu, dpu_nb_cycles[NB_DPU], dpu_clocks_per_sec[NB_DPU];

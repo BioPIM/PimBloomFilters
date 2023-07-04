@@ -12,7 +12,7 @@
 
 #include "bloom_filters_common.h"
 
-// #define USE_DPU_SIMULATOR
+#define USE_DPU_SIMULATOR
 
 #ifdef USE_DPU_SIMULATOR
 	#define DPU_PROFILE "backend=simulator"
@@ -23,10 +23,10 @@
 using namespace std;
 using namespace dpu;
 
-#define NB_DPU 16
+#define NB_DPU 1
 #define NB_THREADS 8
 
-#define NB_ITEMS 1600000
+#define NB_ITEMS 10000
 #define NB_NO_ITEMS 1000
 #define NB_HASH 8
 #define BLOOM_SIZE2 24
@@ -34,6 +34,14 @@ using namespace dpu;
 #define BLOOM_SIZE (1 << BLOOM_SIZE2)
 
 #define NB_REPEATS 1
+
+#define TIMEIT(f) \
+    do { \
+        clock_t start = clock(); \
+        f; \
+        clock_t stop = clock(); \
+        cout << "Took " << (double) (stop - start) / CLOCKS_PER_SEC << " seconds" << endl; \
+    } while (0)
 
 class BloomHashFunctors {
 public:
@@ -282,30 +290,39 @@ int main() {
 	}
 
 	try {
-		
 
-		clock_t start = clock();
-		PimBloomFilter *bloom_filter = new PimBloomFilter(NB_DPU, BLOOM_SIZE2, NB_HASH, PimBloomFilter::BASIC_CACHE_ITEMS);
-		bloom_filter->insert(items);
-		clock_t end = clock();
-		cout << "Host elapsed time for insertions = " << (double) (end - start) / CLOCKS_PER_SEC << " seconds" << endl;
+		cout << "> Creating filter..." << endl;
+		PimBloomFilter *bloom_filter;
+		TIMEIT(bloom_filter = new PimBloomFilter(NB_DPU, BLOOM_SIZE2, NB_HASH, PimBloomFilter::BASIC_CACHE_ITEMS));
+
+		cout << "> Inserting items..." << endl;
+		TIMEIT(bloom_filter->insert(items));
 
 		// Checking absence of false negative
+		cout << "> Checking false negatives..." << endl;
 		auto rng = std::default_random_engine {};
 		std::shuffle(std::begin(items), std::end(items), rng);
-		uint32_t nb_positive_lookups = bloom_filter->contains(items);
+		uint32_t nb_positive_lookups;
+		TIMEIT(nb_positive_lookups = bloom_filter->contains(items));
 		if (nb_positive_lookups == items.size()) {
-			cout << "[OK] All items inserted give a positive" << endl;
+			cout << PASS_FMT << "[PASS] All items inserted give a true positive" << RESET_FMT << endl;
 		} else {
-			cout << "[WARNING] There is " << items.size() - nb_positive_lookups << " false negative(s) / " << items.size() << endl;
+			cout << FAIL_FMT << "[FAIL] There is " << items.size() - nb_positive_lookups << " false negative(s) / " << items.size() << RESET_FMT << endl;
 		}
 
 		// Computing false positive frequency
-		nb_positive_lookups = bloom_filter->contains(no_items);
-		cout << "False positive frequency is " << (double) nb_positive_lookups / no_items.size() << endl;
-		cout << "Reference false positive probability is " << bloom_filter->get_reference_false_positive_probability(items.size()) << endl;
+		cout << "> Checking false positives..." << endl;
+		TIMEIT(nb_positive_lookups = bloom_filter->contains(no_items));
+		double fpr = (double) nb_positive_lookups / no_items.size();
+		if (fpr > 0.1) {
+			cout << WARNING_FMT << "[WARNING] FPR = " << fpr << " is quite significant" << RESET_FMT << endl;
+		} else {
+			cout << PASS_FMT << "[PASS] FPR = " << fpr << " is low" << RESET_FMT << endl;
+		}
+		// cout << "Reference false positive probability is " << bloom_filter->get_reference_false_positive_probability(items.size()) << endl;
 
 		delete bloom_filter;
+
 	} catch (invalid_argument& e) {
         cerr << e.what() << endl;
         return -1;

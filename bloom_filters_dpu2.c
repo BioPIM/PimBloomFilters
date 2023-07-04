@@ -68,10 +68,6 @@ bool contains(uint64_t item, uint8_t __mram_ptr* the_blooma) {
 
 int main() {
 
-	if (me() == 0) {
-		dpu_printf("DPU running\n");
-	}
-
 	uint8_t __mram_ptr* t_blooma = &blooma[MAX_BLOOM_DPU_SIZE * me()];
 
 	perfcounter_config(COUNT_CYCLES, true);
@@ -90,9 +86,12 @@ int main() {
 		
 		} case INSERT: {
 
+			int t_items_cnt = 0;
+
 			uint64_t items_cache[ITEMS_CACHE_SIZE];
 			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
 			uint64_t nb_items = items_cache[0];
+			dpu_printf_0("We have %lu items\n", nb_items);
 			int cache_idx = 1;
 			for (int i = 0; i < nb_items; i++) {
 				if (cache_idx == ITEMS_CACHE_SIZE) {
@@ -104,11 +103,13 @@ int main() {
 					for (size_t k = 0; k < _nb_hash; k++) {
 						uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
 						t_blooma[h0 >> 3] |= bit_mask[h0 & 7];
-						// mram_update_byte_atomic(&t_blooma[me()][h0 >> 3], insert_atomic, bit_mask[h0 & 7]);
+						// mram_update_byte_atomic(&t_blooma[me()][h0 >> 3], insert_atomic, bit_mask[h0 & 7]); // Each tasklet has its own filter, no need to sync
 					}
+					t_items_cnt++;
 				}
 				cache_idx++;
 			}
+			dpu_printf_me("I have %d items\n", t_items_cnt);
 			break;
 		
 		} case LOOKUP: {
@@ -117,27 +118,25 @@ int main() {
 			uint64_t items_cache[ITEMS_CACHE_SIZE];
 			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
 			uint64_t nb_items = items_cache[0];
-			int item_cnt = 0;
 			int cache_idx = 1;
-			while (item_cnt < nb_items) {
+			for (int i = 0; i < nb_items; i++) {
 				if (cache_idx == ITEMS_CACHE_SIZE) {
-					mram_read(&items[item_cnt + 1], items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
+					mram_read(&items[i + 1], items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
 					cache_idx = 0;
 				}
 				uint64_t item = items_cache[cache_idx];
 				if ((item & 15) == me()) {
 					bool result = contains(item, t_blooma);
 					nb_positive_lookups[me()] += result;
-					dpu_printf("%d", result);
+					// dpu_printf("%d", result);
 				}
 				cache_idx++;
-				item_cnt++;
 			}
 
 			barrier_wait(&end_lookup_barrier);
 			
 			if (me() == 0) {
-				dpu_printf("\n");
+				// dpu_printf("\n");
 				total_nb_positive_lookups = 0;
 				for (size_t t = 0; t < NR_TASKLETS; t++) {
 					total_nb_positive_lookups += nb_positive_lookups[t];

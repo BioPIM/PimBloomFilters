@@ -1,7 +1,7 @@
 #define MAX_NB_ITEMS_PER_DPU (1 << 16)
 #define MAX_BLOOM_DPU_SIZE2 20
 
-#define LOG_DPU
+// #define LOG_DPU
 
 #ifdef LOG_DPU
     #define dpu_printf(...) printf(__VA_ARGS__)
@@ -14,10 +14,13 @@
 #endif
 
 enum BloomMode {
-    INIT,
-    INSERT,
-    LOOKUP,
+    BLOOM_INIT,
+    BLOOM_WEIGHT,
+    BLOOM_INSERT,
+    BLOOM_LOOKUP,
 };
+
+#define CEIL8(x) (((x) >> 3) << 3)
 
 #define PASS_FMT    "\033[36m"
 #define WARNING_FMT "\033[33m"

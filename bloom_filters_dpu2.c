@@ -18,7 +18,9 @@
 
 #define ITEMS_CACHE_SIZE 256
 
-BARRIER_INIT(end_lookup_barrier, NR_TASKLETS);
+#define INIT_BLOOM_CACHE_SIZE 2048
+
+BARRIER_INIT(reduce_all_barrier, NR_TASKLETS);
 
 // Input from host
 // WRAM
@@ -33,12 +35,12 @@ __mram_noinit uint64_t items[MAX_NB_ITEMS_PER_DPU + 8];
 uint64_t _dpu_size_reduced;
 // MRAM
 __mram_noinit uint8_t blooma[MAX_BLOOM_DPU_SIZE * NR_TASKLETS];
-uint32_t nb_positive_lookups[NR_TASKLETS];
+uint32_t t_results[NR_TASKLETS];
 
 // Output to host
 // WRAM - Performance
 __host uint32_t nb_cycles;
-__host uint32_t total_nb_positive_lookups;
+__host uint32_t result;
 
 //---------------------------------------------------------------------------//
 // UTILITIES
@@ -62,6 +64,16 @@ bool contains(uint64_t item, uint8_t __mram_ptr* the_blooma) {
 	return true;
 }
 
+void reduce_all_results() {
+	barrier_wait(&reduce_all_barrier);
+	if (me() == 0) {
+		result = 0;
+		for (size_t t = 0; t < NR_TASKLETS; t++) {
+			result += t_results[t];
+		}
+	}
+}
+
 //---------------------------------------------------------------------------//
 // MAIN
 //---------------------------------------------------------------------------//
@@ -74,17 +86,46 @@ int main() {
 
 	switch (_mode) {
 
-		case INIT: {
+		case BLOOM_INIT: {
 
-			memset(t_blooma, 0, ((1 << _dpu_size2) >> 3) * sizeof(unsigned char));
+			// Basic version: memset in mram, a bit slow
+			// memset(t_blooma, 0, ((1 << _dpu_size2) >> 3) * sizeof(unsigned char));
+
+			// Better version, use a zeros cache in wram
+			uint8_t local_zeros[INIT_BLOOM_CACHE_SIZE];
+			uint64_t total_size = ((1 << _dpu_size2) >> 3);
+			memset(local_zeros, 0, INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
+			for (int i = 0; i < total_size; i += INIT_BLOOM_CACHE_SIZE) {
+				if ((i + INIT_BLOOM_CACHE_SIZE) >= total_size) {
+					mram_write(local_zeros, &t_blooma[i], CEIL8(total_size - i) * sizeof(unsigned char));
+				} else {
+					mram_write(local_zeros, &t_blooma[i], INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
+				}
+			}
+			
 			if (me() == 0) {
-				dpu_printf("Filter size2 is = %lu\n", _dpu_size2);
+				dpu_printf("Filter size2 = %lu\n", _dpu_size2);
 				_dpu_size_reduced = (1 << _dpu_size2) - 1;
 			}
 			// dpu_printf("[%02d] My Bloom start adress is %p\n", me(), t_blooma);
+
 			break;
 		
-		} case INSERT: {
+		} case BLOOM_WEIGHT: {
+
+			t_results[me()] = 0;
+			uint8_t bloom_cache[INIT_BLOOM_CACHE_SIZE];
+			uint64_t total_size = ((1 << _dpu_size2) >> 3);
+			for (int i = 0; i < total_size; i += INIT_BLOOM_CACHE_SIZE) {
+				mram_read(&t_blooma[i], bloom_cache, INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
+				for (int k = 0; (k < INIT_BLOOM_CACHE_SIZE) & ((i + k) < total_size); k++) {
+					t_results[me()] += __builtin_popcount(bloom_cache[k]);
+				}
+			}
+			reduce_all_results();
+			break;
+		
+		} case BLOOM_INSERT: {
 
 			int t_items_cnt = 0;
 
@@ -112,9 +153,9 @@ int main() {
 			dpu_printf_me("I have %d items\n", t_items_cnt);
 			break;
 		
-		} case LOOKUP: {
+		} case BLOOM_LOOKUP: {
 			
-			nb_positive_lookups[me()] = 0;
+			t_results[me()] = 0;
 			uint64_t items_cache[ITEMS_CACHE_SIZE];
 			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
 			uint64_t nb_items = items_cache[0];
@@ -127,21 +168,12 @@ int main() {
 				uint64_t item = items_cache[cache_idx];
 				if ((item & 15) == me()) {
 					bool result = contains(item, t_blooma);
-					nb_positive_lookups[me()] += result;
+					t_results[me()] += result;
 					// dpu_printf("%d", result);
 				}
 				cache_idx++;
 			}
-
-			barrier_wait(&end_lookup_barrier);
-			
-			if (me() == 0) {
-				// dpu_printf("\n");
-				total_nb_positive_lookups = 0;
-				for (size_t t = 0; t < NR_TASKLETS; t++) {
-					total_nb_positive_lookups += nb_positive_lookups[t];
-				}
-			}
+			reduce_all_results();
 			break;
 		
 		}

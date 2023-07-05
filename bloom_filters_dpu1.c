@@ -75,7 +75,7 @@ int main() {
 
 	switch (_mode) {
 
-		case INIT: {
+		case BLOOM_INIT: {
 
 			blooma_starts[me()] = &blooma[MAX_BLOOM_DPU_SIZE * me()];
 			memset(blooma_starts[me()], 0, ((1 << _dpu_size2) >> 3) * sizeof(unsigned char));
@@ -86,7 +86,7 @@ int main() {
 			// dpu_printf("[%02d] My Bloom start adress is %p\n", me(), blooma_starts[me()]);
 			break;
 		
-		} case INSERT: {
+		} case BLOOM_INSERT: {
 
 			uint64_t nb_items = items[0];
 			for (int i = 0; i < nb_items; i++) {
@@ -101,7 +101,7 @@ int main() {
 			}
 			break;
 		
-		} case LOOKUP: {
+		} case BLOOM_LOOKUP: {
 			
 			nb_positive_lookups[me()] = 0;
 			uint64_t nb_items = items[0];
@@ -125,6 +125,10 @@ int main() {
 			}
 			break;
 		
+		} case BLOOM_WEIGHT: {
+
+			break;
+			
 		}
 	}
 

@@ -12,7 +12,7 @@
 
 #include "bloom_filters_common.h"
 
-#define USE_DPU_SIMULATOR
+// #define USE_DPU_SIMULATOR
 
 #ifdef USE_DPU_SIMULATOR
 	#define DPU_PROFILE "backend=simulator"
@@ -34,6 +34,8 @@ using namespace dpu;
 #define BLOOM_SIZE (1 << BLOOM_SIZE2)
 
 #define NB_REPEATS 1
+
+#define FPR_WARNING_THRESHOLD 0.1
 
 #define TIMEIT(f) \
     do { \
@@ -100,7 +102,7 @@ public:
 		_size_reduced = _size - 1;
 		_dpu_size2 = ceil(log(_size / (NB_DPU * 16)) / log(2));
 		
-		if (_dpu_size2 > MAX_BLOOM_DPU_SIZE2) {
+		if ((_dpu_size2 >> 3) > MAX_BLOOM_DPU_SIZE2) {
 			throw invalid_argument(
 				  std::string("Error: filter size2 per DPU is bigger than max space available (")
 				+ std::to_string(_dpu_size2)
@@ -116,7 +118,7 @@ public:
 		DPU_ASSERT(dpu_broadcast_to(_set, "_dpu_size2", 0, &_dpu_size2, sizeof(_dpu_size2), DPU_XFER_DEFAULT));
 		DPU_ASSERT(dpu_broadcast_to(_set, "_nb_hash", 0, &_nb_hash, sizeof(_nb_hash), DPU_XFER_DEFAULT));
 		
-		launch_dpu(INIT);
+		launch_dpu(BloomMode::BLOOM_INIT);
 		
 	}
 
@@ -145,7 +147,7 @@ public:
 					DPU_ASSERT(dpu_prepare_xfer(_dpu, buckets[_dpu_idx]));
 				}
 				DPU_ASSERT(dpu_push_xfer(_set, DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * ((MAX_NB_ITEMS_PER_DPU + 1 + 7) >> 3) << 3, DPU_XFER_DEFAULT));
-				launch_dpu_async(INSERT);
+				launch_dpu_async(BloomMode::BLOOM_INSERT);
 
 				// Reset buckets
 				for (size_t d = 0; d < _nb_dpu; d++) {
@@ -162,8 +164,14 @@ public:
 			DPU_ASSERT(dpu_prepare_xfer(_dpu, buckets[_dpu_idx]));
 		}
 		DPU_ASSERT(dpu_push_xfer(_set, DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * ((MAX_NB_ITEMS_PER_DPU + 1 + 7) >> 3) << 3, DPU_XFER_DEFAULT));
-		launch_dpu(INSERT);
+		launch_dpu(BloomMode::BLOOM_INSERT);
 	}
+
+	void insert (const u_int64_t& item) {
+		std::vector<u_int64_t> items;
+		items.push_back(item);
+		insert(items);
+    }
 
 	uint32_t contains(std::vector<u_int64_t> items) {
 
@@ -205,6 +213,19 @@ public:
 		items.push_back(item);
 		return contains(items); // FIXME
     }
+
+	uint32_t get_weight() {
+		launch_dpu(BloomMode::BLOOM_WEIGHT);
+		uint32_t total_weight = 0, weights[_nb_dpu];
+		DPU_FOREACH(_set, _dpu, _dpu_idx) {
+			DPU_ASSERT(dpu_prepare_xfer(_dpu, &weights[_dpu_idx]));
+		}
+		DPU_ASSERT(dpu_push_xfer(_set, DPU_XFER_FROM_DPU, "result", 0, sizeof(uint32_t), DPU_XFER_DEFAULT));
+		for (size_t d = 0; d < _nb_dpu; d++) {
+			total_weight += weights[d];
+		}
+		return total_weight;
+	}
 
 	double get_reference_false_positive_probability(size_t nb_items) {
 		return pow(1.0 - exp(-(double) _nb_hash * (double) nb_items / (double) _size), (double) _nb_hash);
@@ -261,13 +282,13 @@ private:
 			DPU_ASSERT(dpu_prepare_xfer(_dpu, buckets[_dpu_idx]));
 		}
 		DPU_ASSERT(dpu_push_xfer(_set, DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * ((MAX_NB_ITEMS_PER_DPU + 1 + 7) >> 3) << 3, DPU_XFER_DEFAULT));
-		launch_dpu(LOOKUP);
+		launch_dpu(BloomMode::BLOOM_LOOKUP);
 
 		uint32_t total_nb_positive_lookups = 0, nb_positive_lookups[_nb_dpu];
 		DPU_FOREACH(_set, _dpu, _dpu_idx) {
 			DPU_ASSERT(dpu_prepare_xfer(_dpu, &nb_positive_lookups[_dpu_idx]));
 		}
-		DPU_ASSERT(dpu_push_xfer(_set, DPU_XFER_FROM_DPU, "total_nb_positive_lookups", 0, sizeof(uint32_t), DPU_XFER_DEFAULT));
+		DPU_ASSERT(dpu_push_xfer(_set, DPU_XFER_FROM_DPU, "result", 0, sizeof(uint32_t), DPU_XFER_DEFAULT));
 		for (size_t d = 0; d < _nb_dpu; d++) {
 			total_nb_positive_lookups += nb_positive_lookups[d];
 		}
@@ -295,10 +316,27 @@ int main() {
 		PimBloomFilter *bloom_filter;
 		TIMEIT(bloom_filter = new PimBloomFilter(NB_DPU, BLOOM_SIZE2, NB_HASH, PimBloomFilter::BASIC_CACHE_ITEMS));
 
+		cout << "> Checking weight after initialization..." << endl;
+		uint32_t weight;
+		TIMEIT(weight = bloom_filter->get_weight());
+		if (weight == 0) {
+			cout << PASS_FMT << "[PASS] Weight is 0 as expected" << RESET_FMT << endl;
+		} else {
+			cout << FAIL_FMT << "[FAIL] Weight is " << weight << " but should be 0" << RESET_FMT << endl;
+		}
+
+		cout << "> Inserting 1 item and checking weight..." << endl;
+		bloom_filter->insert(8);
+		TIMEIT(weight = bloom_filter->get_weight());
+		if (weight <= NB_HASH) {
+			cout << PASS_FMT << "[PASS] Weight is equal or lower than " << NB_HASH << " as expected" << RESET_FMT << endl;
+		} else {
+			cout << FAIL_FMT << "[FAIL] Weight is " << weight << " but should be equal or lower) than " << NB_HASH << RESET_FMT << endl;
+		}
+
 		cout << "> Inserting items..." << endl;
 		TIMEIT(bloom_filter->insert(items));
 
-		// Checking absence of false negative
 		cout << "> Checking false negatives..." << endl;
 		auto rng = std::default_random_engine {};
 		std::shuffle(std::begin(items), std::end(items), rng);
@@ -310,11 +348,10 @@ int main() {
 			cout << FAIL_FMT << "[FAIL] There is " << items.size() - nb_positive_lookups << " false negative(s) / " << items.size() << RESET_FMT << endl;
 		}
 
-		// Computing false positive frequency
 		cout << "> Checking false positives..." << endl;
 		TIMEIT(nb_positive_lookups = bloom_filter->contains(no_items));
 		double fpr = (double) nb_positive_lookups / no_items.size();
-		if (fpr > 0.1) {
+		if (fpr > FPR_WARNING_THRESHOLD) {
 			cout << WARNING_FMT << "[WARNING] FPR = " << fpr << " is quite significant" << RESET_FMT << endl;
 		} else {
 			cout << PASS_FMT << "[PASS] FPR = " << fpr << " is low" << RESET_FMT << endl;

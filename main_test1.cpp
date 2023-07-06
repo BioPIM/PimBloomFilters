@@ -1,6 +1,8 @@
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "thirdparty/doctest/doctest.h"
+
 #include <stdint.h>
 #include <stdio.h>
-#include <vector>
 #include <iostream>
 #include <random>
 #include <algorithm>
@@ -10,8 +12,6 @@
 
 #define NB_ITEMS 10000
 #define NB_NO_ITEMS 1000
-
-#define BLOOM_SIZE (1 << BLOOM_SIZE2)
 
 TEST_CASE("Testing Bloom filters with simulator") {
 
@@ -77,7 +77,7 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	nb_positive_lookups = bloom_filter->contains(no_items);
 	double fpr = (double) nb_positive_lookups / no_items.size();
 	CHECK(fpr <= 1.0);
-	if (items.size() < (1 << bloom_size2)) {
+	if (items.size() <= (1 << bloom_size2)) {
 		WARN(fpr <= 0.1);
 	}
 

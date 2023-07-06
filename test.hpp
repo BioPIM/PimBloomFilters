@@ -1,12 +1,11 @@
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "thirdparty/doctest/doctest.h"
+#include <vector>
 
 #define TIMEIT(f) \
     do { \
         clock_t start = clock(); \
         f; \
         clock_t stop = clock(); \
-        cout << "Took " << (double) (stop - start) / CLOCKS_PER_SEC << " seconds" << endl; \
+        std::cout << "Took " << (double) (stop - start) / CLOCKS_PER_SEC << " seconds" << std::endl; \
     } while (0)
 
 class DpuProfile {

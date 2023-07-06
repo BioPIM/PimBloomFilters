@@ -91,7 +91,7 @@ int main() {
 			// Basic version: memset in mram, a bit slow
 			// memset(t_blooma, 0, ((1 << _dpu_size2) >> 3) * sizeof(unsigned char));
 
-			// Better version, use a zeros cache in wram
+			// Better version: use a cache filled with zeros in wram
 			uint8_t local_zeros[INIT_BLOOM_CACHE_SIZE];
 			uint64_t total_size = ((1 << _dpu_size2) >> 3);
 			memset(local_zeros, 0, INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
@@ -115,11 +115,16 @@ int main() {
 
 			t_results[me()] = 0;
 			uint8_t bloom_cache[INIT_BLOOM_CACHE_SIZE];
-			uint64_t total_size = ((1 << _dpu_size2) >> 3);
-			for (int i = 0; i < total_size; i += INIT_BLOOM_CACHE_SIZE) {
-				mram_read(&t_blooma[i], bloom_cache, INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
-				for (int k = 0; (k < INIT_BLOOM_CACHE_SIZE) & ((i + k) < total_size); k++) {
-					t_results[me()] += __builtin_popcount(bloom_cache[k]);
+			if (_dpu_size2 < 3) {
+				mram_read(t_blooma, bloom_cache, 8 * sizeof(unsigned char));
+				t_results[me()] += __builtin_popcount(bloom_cache[0] & ((1 << (_dpu_size2 + 1)) - 1));
+			} else {
+				uint64_t total_size = ((1 << _dpu_size2) >> 3);
+				for (int i = 0; i < total_size; i += INIT_BLOOM_CACHE_SIZE) {
+					mram_read(&t_blooma[i], bloom_cache, INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
+					for (int k = 0; (k < INIT_BLOOM_CACHE_SIZE) & ((i + k) < total_size); k++) {
+						t_results[me()] += __builtin_popcount(bloom_cache[k]);
+					}
 				}
 			}
 			reduce_all_results();
@@ -154,11 +159,14 @@ int main() {
 			break;
 		
 		} case BLOOM_LOOKUP: {
+
+			int t_items_cnt = 0;
 			
 			t_results[me()] = 0;
 			uint64_t items_cache[ITEMS_CACHE_SIZE];
 			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
 			uint64_t nb_items = items_cache[0];
+			dpu_printf_0("We have %lu items\n", nb_items);
 			int cache_idx = 1;
 			for (int i = 0; i < nb_items; i++) {
 				if (cache_idx == ITEMS_CACHE_SIZE) {
@@ -170,9 +178,11 @@ int main() {
 					bool result = contains(item, t_blooma);
 					t_results[me()] += result;
 					// dpu_printf("%d", result);
+					t_items_cnt++;
 				}
 				cache_idx++;
 			}
+			dpu_printf_me("I have %d items\n", t_items_cnt);
 			reduce_all_results();
 			break;
 		

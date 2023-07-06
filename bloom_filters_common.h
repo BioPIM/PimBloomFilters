@@ -21,8 +21,3 @@ enum BloomMode {
 };
 
 #define CEIL8(x) (((x) >> 3) << 3)
-
-#define PASS_FMT    "\033[36m"
-#define WARNING_FMT "\033[33m"
-#define FAIL_FMT    "\033[31m"
-#define RESET_FMT   "\033[0m"

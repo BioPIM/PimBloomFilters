@@ -21,32 +21,32 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	INFO("Creating filter...");
 	PimBloomFilter *bloom_filter;
 
-	int nb_dpu, bloom_size2, nb_hash;
+	int nb_ranks, bloom_size2, nb_hash;
 	const char* dpu_profile = DpuProfile::SIMULATOR;
 
 	SUBCASE("") {
-		nb_dpu = 1;
+		nb_ranks = 1;
 		bloom_size2 = 20;
 		SUBCASE("") { nb_hash = 1; }
 		SUBCASE("") { nb_hash = 8; }
 	}
 	SUBCASE("") {
-		nb_dpu = 4;
+		nb_ranks = 2;
 		bloom_size2 = 24;
 		SUBCASE("") { nb_hash = 1; }
 		SUBCASE("") { nb_hash = 8; }
 	}
 	SUBCASE("") {
-		nb_dpu = 1;
-		bloom_size2 = 4;
+		nb_ranks = 2;
+		bloom_size2 = 8;
 		nb_hash = 4;
 	}
 
-	CAPTURE(nb_dpu);
+	CAPTURE(nb_ranks);
 	CAPTURE(bloom_size2);
 	CAPTURE(nb_hash);
 
-	bloom_filter = new PimBloomFilter(nb_dpu, bloom_size2, nb_hash, PimBloomFilter::BASIC_CACHE_ITEMS, dpu_profile);
+	bloom_filter = new PimBloomFilter(nb_ranks, bloom_size2, nb_hash, PimBloomFilter::BASIC_CACHE_ITEMS, dpu_profile);
 
 	INFO("Checking weight after initialization...");
 	uint32_t weight = bloom_filter->get_weight();

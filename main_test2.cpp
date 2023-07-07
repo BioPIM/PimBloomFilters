@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
 
     options.add_options()
         ("k,hash", "Number of hash functions", cxxopts::value<int>()->default_value("8"))
-        ("d,dpu", "Number of DPUs", cxxopts::value<int>()->default_value("1"))
+        ("r,rank", "Number of DPUs ranks", cxxopts::value<int>()->default_value("1"))
         ("m,size2", "Size2 of the filter", cxxopts::value<int>()->default_value("20"))
         ("n,items", "Number of items", cxxopts::value<int>()->default_value("10000"))
         ("s,simulator", "Use the simulator", cxxopts::value<bool>()->default_value("false"))
@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
         exit(0);
     }
 
-    int nb_dpu = result["dpu"].as<int>();
+    int nb_ranks = result["rank"].as<int>();
     int nb_hash = result["hash"].as<int>();
     int bloom_size2 = result["size2"].as<int>();
     int nb_items = result["items"].as<int>();
@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 
 	std::cout << "> Creating filter..." << std::endl;
 	PimBloomFilter *bloom_filter;
-    TIMEIT(bloom_filter = new PimBloomFilter(nb_dpu, bloom_size2, nb_hash, PimBloomFilter::BASIC_CACHE_ITEMS, dpu_profile));
+    TIMEIT(bloom_filter = new PimBloomFilter(nb_ranks, bloom_size2, nb_hash, PimBloomFilter::BASIC_CACHE_ITEMS, dpu_profile));
 
     std::cout << "> Inserting many items..." << std::endl;
 	TIMEIT(bloom_filter->insert(items));

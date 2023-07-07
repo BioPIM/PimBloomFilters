@@ -1,11 +1,12 @@
 #include <vector>
+#include <omp.h>
 
 #define TIMEIT(f) \
     do { \
-        clock_t start = clock(); \
+        double start = omp_get_wtime(); \
         f; \
-        clock_t stop = clock(); \
-        std::cout << "Took " << (double) (stop - start) / CLOCKS_PER_SEC << " seconds" << std::endl; \
+        double stop = omp_get_wtime(); \
+        std::cout << "Took " << stop - start << " seconds" << std::endl; \
     } while (0)
 
 class DpuProfile {

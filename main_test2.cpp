@@ -49,10 +49,10 @@ int main(int argc, char** argv) {
     std::cout << "> Computing weight..." << std::endl;
     TIMEIT(bloom_filter->get_weight());
 
-    std::cout << "> Querying all inserted items in a random order..." << std::endl;
-	auto rng = std::default_random_engine{};
-	std::shuffle(std::begin(items), std::end(items), rng);
-	TIMEIT(bloom_filter->contains(items));
+    // std::cout << "> Querying all inserted items in a random order..." << std::endl;
+	// auto rng = std::default_random_engine{};
+	// std::shuffle(std::begin(items), std::end(items), rng);
+	// TIMEIT(bloom_filter->contains(items));
 
 	delete bloom_filter;
 

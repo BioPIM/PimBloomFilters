@@ -8,7 +8,7 @@ TEST_H = test.hpp
 make: $(TARGETS_DPU) $(TARGET_TESTS)
 
 $(TARGET_TESTS): %: %.cpp $(COMMON_H) $(TEST_H) $(BLOOM_CPP)
-	g++ --std=c++11 $< -o $@ `dpu-pkg-config --cflags --libs dpu` -g
+	g++ --std=c++11 $< -o $@ `dpu-pkg-config --cflags --libs dpu` -fopenmp
 	
 $(TARGETS_DPU): %: %.c bloom_filters_common.h $(COMMON_H) $(TARGETS_DPU_H)
 	dpu-upmem-dpurte-clang $< -DNR_TASKLETS=16 -DSTACK_SIZE_DEFAULT=3072 -O2 -o $@

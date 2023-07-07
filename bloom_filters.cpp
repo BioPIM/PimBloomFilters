@@ -4,9 +4,12 @@
 #include <math.h>
 #include <vector>
 #include <iostream>
+#include <mutex>
 #include <omp.h>
 
 #include "bloom_filters_common.h"
+
+#define NB_THREADS 8
 
 class BloomHashFunctors {
 public:
@@ -91,14 +94,21 @@ public:
 			);
 		}
 
-		_nb_dpu = 0;
 		const char* binary_name = get_dpu_binary_name(implem);
 		_sets = (dpu_set_t*) malloc(_nb_ranks * sizeof(dpu_set_t));
-		_nb_dpu_per_rank = (int*) malloc((_nb_ranks + 1) * sizeof(int));
-		_nb_dpu_per_rank[0] = 0;
+	
+		// Alloc in parallel
+		#pragma omp parallel for num_threads(NB_THREADS)
 		for (int r = 0; r < _nb_ranks; r++) {
 			DPU_ASSERT(dpu_alloc_ranks(1, dpu_profile, &_sets[r]));
 			DPU_ASSERT(dpu_load(_sets[r], binary_name, NULL));
+		}
+
+		// This part must be sequential
+		_nb_dpu = 0;
+		_nb_dpu_per_rank = (int*) malloc((_nb_ranks + 1) * sizeof(int));
+		_nb_dpu_per_rank[0] = 0;
+		for (int r = 0; r < _nb_ranks; r++) {
 			uint32_t nr_dpus;
 			DPU_ASSERT(dpu_get_nr_dpus(_sets[r], &nr_dpus));
 			_nb_dpu += nr_dpus;
@@ -111,6 +121,8 @@ public:
 
 		_dpu_size2 = ceil(log(_size / (_nb_dpu * 16)) / log(2));
 
+		// Broadcast info and launch in parallel
+		#pragma omp parallel for num_threads(NB_THREADS)
 		for (int r = 0; r < _nb_ranks; r++) {
 			DPU_ASSERT(dpu_broadcast_to(_sets[r], "_dpu_size2", 0, &_dpu_size2, sizeof(_dpu_size2), DPU_XFER_DEFAULT));
 			DPU_ASSERT(dpu_broadcast_to(_sets[r], "_nb_hash", 0, &_nb_hash, sizeof(_nb_hash), DPU_XFER_DEFAULT));
@@ -135,14 +147,24 @@ public:
 			buckets[d][0] = 0;
 		}
 
+		std::vector<std::mutex*> mutexes;
+		for (int r = 0; r < _nb_ranks; r++) {
+			mutexes.push_back(new std::mutex());
+		}
+
 		uint64_t bucket_size = _size / _nb_dpu;
 
-		for (auto item : items) {
-			uint64_t h0 = this->_hash_functions(item, 0) & _size_reduced;
-			int bucket_idx = h0 / bucket_size;
+		#pragma omp parallel for num_threads(NB_THREADS)
+		for (int i = 0; i < items.size(); i++) {
+			uint64_t item = items[i];
+			uint64_t h0 = this->_hash_functions(item, 0);
+			
+			uint32_t rank = fastrange32(h0, _nb_ranks);
+			int nb_dpus_in_rank = _nb_dpu_per_rank[rank + 1] - _nb_dpu_per_rank[rank];
+			uint32_t bucket_idx = _nb_dpu_per_rank[rank] + fastrange32(h0, nb_dpus_in_rank);
+			
+			mutexes[rank]->lock();
 			if (buckets[bucket_idx][0] == MAX_NB_ITEMS_PER_DPU) {
-
-				int rank = get_rank_from_dpu(bucket_idx);
 
 				// Launch
 				prepare_dpu_launch_async(rank);
@@ -160,9 +182,11 @@ public:
 			}
 			buckets[bucket_idx][0]++;
  			buckets[bucket_idx][buckets[bucket_idx][0]] = item;
+			mutexes[rank]->unlock();
 		}
 
 		// Launch a last round for the ranks that need it
+		#pragma omp parallel for num_threads(NB_THREADS)
 		for (int rank = 0; rank < _nb_ranks; rank++) {
 			for (int d = _nb_dpu_per_rank[rank]; d < _nb_dpu_per_rank[rank + 1]; d++) {
 				if (buckets[d][0]) {
@@ -175,6 +199,10 @@ public:
 					break;
 				}
 			}
+		}
+
+		for (int r = 0; r < _nb_ranks; r++) {
+			delete mutexes[r];
 		}
 	}
 
@@ -252,9 +280,18 @@ public:
 	/// @brief Computes the weight of the filter
 	/// @return number of bits set to 1 in the filter
 	uint32_t get_weight() {
+		
+		// Launch in parallel all ranks
+		#pragma omp parallel for num_threads(NB_THREADS)
+		for (int rank = 0; rank < _nb_ranks; rank++) {
+			launch_rank_async(rank, BloomMode::BLOOM_WEIGHT);
+			uint32_t weights[_nb_dpu_per_rank[rank + 1]];
+		}
+
+		// Reduce results
 		uint32_t total_weight = 0;
 		for (int rank = 0; rank < _nb_ranks; rank++) {
-			launch_rank(rank, BloomMode::BLOOM_WEIGHT);
+			prepare_dpu_launch_async(rank);
 			uint32_t weights[_nb_dpu_per_rank[rank + 1]];
 			DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
 				DPU_ASSERT(dpu_prepare_xfer(_dpu, &weights[_dpu_idx]));
@@ -264,7 +301,9 @@ public:
 				total_weight += weights[d - _nb_dpu_per_rank[rank]];
 			}
 		}
+
 		return total_weight;
+
 	}
 
 	// Wrappers for single items
@@ -337,6 +376,10 @@ private:
 			}
 		}
 		return _nb_ranks - 1;
+	}
+
+	static inline uint32_t fastrange32(uint32_t word, uint32_t p) {
+		return (uint32_t)(((uint64_t)word * (uint64_t)p) >> 32);
 	}
 
 };

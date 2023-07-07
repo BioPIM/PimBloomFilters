@@ -122,10 +122,19 @@ public:
 		_dpu_size2 = ceil(log(_size / (_nb_dpu * 16)) / log(2));
 
 		// Broadcast info and launch in parallel
+		uint32_t dpu_indexes[_nb_dpu];
 		#pragma omp parallel for num_threads(NB_THREADS)
 		for (int r = 0; r < _nb_ranks; r++) {
 			DPU_ASSERT(dpu_broadcast_to(_sets[r], "_dpu_size2", 0, &_dpu_size2, sizeof(_dpu_size2), DPU_XFER_DEFAULT));
 			DPU_ASSERT(dpu_broadcast_to(_sets[r], "_nb_hash", 0, &_nb_hash, sizeof(_nb_hash), DPU_XFER_DEFAULT));
+
+			uint32_t offset = _nb_dpu_per_rank[r];
+			DPU_FOREACH(_sets[r], _dpu, _dpu_idx) {
+				dpu_indexes[_dpu_idx + offset] = _dpu_idx + offset;
+				DPU_ASSERT(dpu_prepare_xfer(_dpu, &dpu_indexes[_dpu_idx + offset]));
+			}
+			DPU_ASSERT(dpu_push_xfer(_sets[r], DPU_XFER_TO_DPU, "_dpu_idx", 0, sizeof(uint32_t), DPU_XFER_DEFAULT));
+
 			launch_rank(r, BloomMode::BLOOM_INIT);
 		}
 
@@ -140,6 +149,43 @@ public:
 	}
 
 	void insert(const std::vector<uint64_t>& items) {
+
+		// uint64_t* buffer = (uint64_t*) malloc(sizeof(uint64_t) * (MAX_NB_ITEMS_PER_DPU + 1));
+		// uint32_t* buffer2 = (uint32_t*) malloc(sizeof(uint32_t) * (MAX_NB_ITEMS_PER_DPU + 1));
+		// buffer[0] = 0;
+		
+		// size_t buffer_index = 0;
+		// for (int i = 0; i < items.size(); i++) {
+		// 	uint64_t item = items[i];
+		// 	buffer[0]++;
+ 		// 	buffer[buffer[0]] = item;
+
+		// 	uint64_t h0 = this->_hash_functions(item, 0);
+		// 	uint32_t rank = fastrange32(h0, _nb_ranks);
+		// 	int nb_dpus_in_rank = _nb_dpu_per_rank[rank + 1] - _nb_dpu_per_rank[rank];
+		// 	uint32_t dpu_idx = _nb_dpu_per_rank[rank] + fastrange32(h0, nb_dpus_in_rank);
+		// 	buffer2[buffer[0]] = dpu_idx;
+
+		// 	if ((buffer[0] == MAX_NB_ITEMS_PER_DPU) || (i == (items.size() - 1))) {
+		// 		#pragma omp parallel for num_threads(NB_THREADS)
+		// 		for (int rank = 0; rank < _nb_ranks; rank++) {
+		// 			for (int d = _nb_dpu_per_rank[rank]; d < _nb_dpu_per_rank[rank + 1]; d++) {
+		// 				prepare_dpu_launch_async(rank);
+		// 				DPU_ASSERT(dpu_broadcast_to(_sets[rank], "items", 0, buffer, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1 + 7), DPU_XFER_DEFAULT));
+		// 				DPU_ASSERT(dpu_broadcast_to(_sets[rank], "items_keys", 0, buffer2, sizeof(uint32_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1 + 7), DPU_XFER_DEFAULT));
+		// 				// DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
+		// 				// 	DPU_ASSERT(dpu_prepare_xfer(_dpu, buffer));
+		// 				// }
+		// 				// DPU_ASSERT(dpu_push_xfer(_sets[rank], DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1 + 7), DPU_XFER_DEFAULT));
+		// 				launch_rank_async(rank, BloomMode::BLOOM_INSERT);
+		// 				break;
+		// 			}
+		// 		}
+		// 		buffer[0] = 0;
+		// 	}
+
+		// }
+
 
 		std::vector<uint64_t*> buckets;
 		for (size_t d = 0; d < _nb_dpu; d++) {
@@ -167,12 +213,12 @@ public:
 			if (buckets[bucket_idx][0] == MAX_NB_ITEMS_PER_DPU) {
 
 				// Launch
-				prepare_dpu_launch_async(rank);
+				// prepare_dpu_launch_async(rank);
 				DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
 					DPU_ASSERT(dpu_prepare_xfer(_dpu, buckets[_nb_dpu_per_rank[rank] + _dpu_idx]));
 				}
 				DPU_ASSERT(dpu_push_xfer(_sets[rank], DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1 + 7), DPU_XFER_DEFAULT));
-				launch_rank_async(rank, BloomMode::BLOOM_INSERT);
+				launch_rank(rank, BloomMode::BLOOM_INSERT);
 
 				// Reset buckets
 				for (int d = _nb_dpu_per_rank[rank]; d < _nb_dpu_per_rank[rank + 1]; d++) {

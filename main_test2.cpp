@@ -46,8 +46,8 @@ int main(int argc, char** argv) {
     std::cout << "> Inserting many items..." << std::endl;
 	TIMEIT(bloom_filter->insert(items));
 
-    std::cout << "> Computing weight..." << std::endl;
-    TIMEIT(bloom_filter->get_weight());
+    // std::cout << "> Computing weight..." << std::endl;
+    // TIMEIT(bloom_filter->get_weight());
 
     // std::cout << "> Querying all inserted items in a random order..." << std::endl;
 	// auto rng = std::default_random_engine{};

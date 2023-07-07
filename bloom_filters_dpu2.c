@@ -16,7 +16,7 @@
 
 #define MAX_BLOOM_DPU_SIZE (1 << MAX_BLOOM_DPU_SIZE2)
 
-#define ITEMS_CACHE_SIZE 256
+#define ITEMS_CACHE_SIZE 128
 
 #define INIT_BLOOM_CACHE_SIZE 2048
 
@@ -25,10 +25,12 @@ BARRIER_INIT(reduce_all_barrier, NR_TASKLETS);
 // Input from host
 // WRAM
 __host uint64_t _dpu_size2;
+__host uint32_t _dpu_idx;
 __host enum BloomMode _mode;
 __host uint64_t _nb_hash;
 // MRAM
 __mram_noinit uint64_t items[MAX_NB_ITEMS_PER_DPU + 8];
+__mram_noinit uint32_t items_keys[MAX_NB_ITEMS_PER_DPU + 8];
 
 // Own variables
 // WRAM
@@ -105,6 +107,7 @@ int main() {
 			
 			if (me() == 0) {
 				dpu_printf("Filter size2 = %lu\n", _dpu_size2);
+				dpu_printf("I am DPU no = %d\n", _dpu_idx);
 				_dpu_size_reduced = (1 << _dpu_size2) - 1;
 			}
 			// dpu_printf("[%02d] My Bloom start adress is %p\n", me(), t_blooma);
@@ -132,27 +135,34 @@ int main() {
 		
 		} case BLOOM_INSERT: {
 
+			dpu_printf("Here");
+
 			int t_items_cnt = 0;
 
-			uint64_t items_cache[ITEMS_CACHE_SIZE];
+			__dma_aligned uint64_t items_cache[ITEMS_CACHE_SIZE];
+			// __dma_aligned uint32_t items_keys_cache[ITEMS_CACHE_SIZE];
 			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
+			// mram_read(items_keys, items_keys_cache, ITEMS_CACHE_SIZE * sizeof(uint32_t));
 			uint64_t nb_items = items_cache[0];
 			dpu_printf_0("We have %lu items\n", nb_items);
 			int cache_idx = 1;
 			for (int i = 0; i < nb_items; i++) {
 				if (cache_idx == ITEMS_CACHE_SIZE) {
 					mram_read(&items[i + 1], items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
+					// mram_read(&items_keys[i + 1], items_keys_cache, ITEMS_CACHE_SIZE * sizeof(uint32_t));
 					cache_idx = 0;
 				}
-				uint64_t item = items_cache[cache_idx];
-				if ((item & 15) == me()) {
-					for (size_t k = 0; k < _nb_hash; k++) {
-						uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
-						t_blooma[h0 >> 3] |= bit_mask[h0 & 7];
-						// mram_update_byte_atomic(&t_blooma[me()][h0 >> 3], insert_atomic, bit_mask[h0 & 7]); // Each tasklet has its own filter, no need to sync
+				// if (items_keys_cache[cache_idx] == _dpu_idx) {
+					uint64_t item = items_cache[cache_idx];
+					if ((item & 15) == me()) {
+						for (size_t k = 0; k < _nb_hash; k++) {
+							uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
+							t_blooma[h0 >> 3] |= bit_mask[h0 & 7];
+							// mram_update_byte_atomic(&t_blooma[me()][h0 >> 3], insert_atomic, bit_mask[h0 & 7]); // Each tasklet has its own filter, no need to sync
+						}
+						t_items_cnt++;
 					}
-					t_items_cnt++;
-				}
+				// }
 				cache_idx++;
 			}
 			dpu_printf_me("I have %d items\n", t_items_cnt);

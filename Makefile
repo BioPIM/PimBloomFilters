@@ -2,7 +2,7 @@ TARGET_TESTS = $(patsubst %.cpp,%,$(wildcard main_test*.cpp))
 TARGETS_DPU = $(patsubst %.c,%,$(wildcard bloom_filters_dpu*.c))
 TARGETS_DPU_H = bloom_filters_dpu.h
 COMMON_H = bloom_filters_common.h
-BLOOM_CPP = bloom_filters.cpp
+BLOOM_CPP = bloom_filters.cpp pim_rankset.cpp
 TEST_H = test.hpp
 
 make: $(TARGETS_DPU) $(TARGET_TESTS)

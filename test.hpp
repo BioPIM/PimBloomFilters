@@ -1,5 +1,6 @@
 #include <vector>
 #include <omp.h>
+#include "pim_rankset.cpp"
 
 #define TIMEIT(f) \
     do { \
@@ -8,15 +9,6 @@
         double stop = omp_get_wtime(); \
         std::cout << "Took " << stop - start << " seconds" << std::endl; \
     } while (0)
-
-class DpuProfile {
-public:
-    const static char* HARDWARE;
-    const static char* SIMULATOR;
-};
-
-const char* DpuProfile::HARDWARE =  "backend=hw";
-const char* DpuProfile::SIMULATOR =  "backend=simulator";
 
 std::vector<uint64_t> get_seq_items(const int nb, const int start_offset = 0) {
     std::vector<uint64_t> items(nb);

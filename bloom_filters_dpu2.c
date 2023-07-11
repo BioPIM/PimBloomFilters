@@ -25,7 +25,6 @@ BARRIER_INIT(reduce_all_barrier, NR_TASKLETS);
 // Input from host
 // WRAM
 __host uint64_t _dpu_size2;
-__host uint32_t _dpu_idx;
 __host enum BloomMode _mode;
 __host uint64_t _nb_hash;
 // MRAM
@@ -109,7 +108,6 @@ int main() {
 			
 			if (me() == 0) {
 				dpu_printf("Filter size2 = %lu\n", _dpu_size2);
-				dpu_printf("I am DPU no = %d\n", _dpu_idx);
 				_dpu_size_reduced = (1 << _dpu_size2) - 1;
 			}
 			// dpu_printf("[%02d] My Bloom start adress is %p\n", me(), t_blooma);
@@ -153,17 +151,15 @@ int main() {
 					// mram_read(&items_keys[i + 1], items_keys_cache, ITEMS_CACHE_SIZE * sizeof(uint32_t));
 					cache_idx = 0;
 				}
-				// if (items_keys_cache[cache_idx] == _dpu_idx) {
-					uint64_t item = items_cache[cache_idx];
-					if ((item & 15) == me()) {
-						for (size_t k = 0; k < _nb_hash; k++) {
-							uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
-							t_blooma[h0 >> 3] |= bit_mask[h0 & 7];
-							// mram_update_byte_atomic(&t_blooma[me()][h0 >> 3], insert_atomic, bit_mask[h0 & 7]); // Each tasklet has its own filter, no need to sync
-						}
-						t_items_cnt++;
+				uint64_t item = items_cache[cache_idx];
+				if ((item & 15) == me()) {
+					for (size_t k = 0; k < _nb_hash; k++) {
+						uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
+						t_blooma[h0 >> 3] |= bit_mask[h0 & 7];
+						// mram_update_byte_atomic(&t_blooma[me()][h0 >> 3], insert_atomic, bit_mask[h0 & 7]); // Each tasklet has its own filter, no need to sync
 					}
-				// }
+					t_items_cnt++;
+				}
 				cache_idx++;
 			}
 			dpu_printf_me("I have %d items\n", t_items_cnt);

@@ -86,6 +86,8 @@ int main() {
 
 	perfcounter_config(COUNT_CYCLES, true);
 
+	dpu_printf_0("Mode is %d\n", _mode);
+
 	switch (_mode) {
 
 		case BLOOM_INIT: {
@@ -135,8 +137,6 @@ int main() {
 		
 		} case BLOOM_INSERT: {
 
-			dpu_printf("Here");
-
 			int t_items_cnt = 0;
 
 			__dma_aligned uint64_t items_cache[ITEMS_CACHE_SIZE];
@@ -144,6 +144,7 @@ int main() {
 			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
 			// mram_read(items_keys, items_keys_cache, ITEMS_CACHE_SIZE * sizeof(uint32_t));
 			uint64_t nb_items = items_cache[0];
+			// uint64_t nb_items = MAX_NB_ITEMS_PER_DPU;
 			dpu_printf_0("We have %lu items\n", nb_items);
 			int cache_idx = 1;
 			for (int i = 0; i < nb_items; i++) {

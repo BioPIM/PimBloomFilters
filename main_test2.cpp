@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 
 	std::cout << "> Creating filter..." << std::endl;
 	PimBloomFilter *bloom_filter;
-    TIMEIT(bloom_filter = new PimBloomFilter(nb_ranks, bloom_size2, nb_hash, PimBloomFilter::BASIC_CACHE_ITEMS, dpu_profile));
+    TIMEIT(bloom_filter = new PimBloomFilter(nb_ranks, bloom_size2, nb_hash, PimBloomFilter::BASIC_CACHE_ITEMS, dpu_profile, false, true));
 
     std::cout << "> Inserting many items..." << std::endl;
 	TIMEIT(bloom_filter->insert(items));

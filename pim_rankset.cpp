@@ -81,6 +81,7 @@ public:
     int get_nb_dpu() { return _nb_dpu; }
     int get_nb_ranks() { return _nb_ranks; }
     int get_nb_dpu_in_rank(int rank_id) { return _nb_dpu_in_rank[rank_id]; }
+    int get_cum_dpu_idx_for_rank(int rank_id) { return _cum_dpu_idx_for_rank[rank_id]; }
 
     void load_binary(const char* binary_name, int rank) {
         // TODO: check if binary exists

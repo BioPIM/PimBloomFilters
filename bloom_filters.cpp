@@ -5,10 +5,7 @@
 #include <iostream>
 #include <mutex>
 #include <omp.h>
-#include <thread>
 #include <queue>
-#include <unordered_map>
-#include <unistd.h>
 
 #include "pim_rankset.cpp"
 #include "bloom_filters_common.h"
@@ -70,8 +67,9 @@ public:
 					const int size2,
 					const uint32_t nb_hash = 4,
 					const Implementation implem = BASIC,
-					const char* dpu_profile = DpuProfile::HARDWARE)
-			: _size2(size2), _nb_hash(nb_hash), _hash_functions(nb_hash) {
+					const char* dpu_profile = DpuProfile::HARDWARE,
+					bool print_dpu_logs = false,
+               		bool do_trace_debug = false) : _size2(size2), _nb_hash(nb_hash), _hash_functions(nb_hash) {
 		
 		if (size2 < 4) {
 			throw std::invalid_argument(std::string("Error: bloom size2 must be >= 4"));
@@ -88,7 +86,7 @@ public:
 		_size = (1 << _size2);
 		_size_reduced = _size - 1;
 
-		_pim_rankset = new PimRankSet(nb_ranks, NB_THREADS, dpu_profile, get_dpu_binary_name(implem), false, true);
+		_pim_rankset = new PimRankSet(nb_ranks, NB_THREADS, dpu_profile, get_dpu_binary_name(implem), print_dpu_logs, do_trace_debug);
 
 		if (_size < _pim_rankset->get_nb_dpu()) {
 			throw std::invalid_argument(std::string("Error: Asking too little space per DPU, use less DPUs or a bigger filter"));
@@ -276,7 +274,9 @@ public:
 		std::mutex rank_ready_mutex;
 		std::mutex done_mutex;
 
-		int nb_workers = 4;
+		int nb_workers = 5;
+		int nb_items = items.size();
+		int nb_ranks = _pim_rankset->get_nb_ranks();
 
 		omp_set_nested(1);
 		#pragma omp parallel sections
@@ -288,28 +288,28 @@ public:
 				#pragma omp parallel num_threads(nb_workers)
 				{
 					int tid = omp_get_thread_num();
-					std::unordered_map<int, std::vector<uint64_t*>*> rank_buckets = std::unordered_map<int, std::vector<uint64_t*>*>();
-					int nb_ranks = _pim_rankset->get_nb_ranks();
+					std::vector<std::vector<uint64_t*>*> rank_buckets = std::vector<std::vector<uint64_t*>*>(nb_ranks, NULL);
+					
 					rank_buckets.reserve(nb_ranks);
-
-					for (int i = tid; i < items.size(); i += nb_workers) {
+					
+					for (int i = tid; i < nb_items; i += nb_workers) {
 						uint64_t item = items[i];
-						uint64_t h0 = this->_hash_functions(item, 0);
-						
-						uint32_t rank_id = fastrange32(h0, nb_ranks);
+						auto dispatch_data = _get_rank_dpu_id_from_item(item);
+						uint32_t rank_id = dispatch_data.first;
+						uint32_t bucket_idx = dispatch_data.second;
 						int nb_dpus_in_rank = _pim_rankset->get_nb_dpu_in_rank(rank_id);
-						uint32_t bucket_idx = fastrange32(h0, nb_dpus_in_rank);
 
-						if (rank_buckets.find(rank_id) == rank_buckets.end()) {
-							std::vector<uint64_t*>* buckets = new std::vector<uint64_t*>();
+						std::vector<uint64_t*>* buckets = rank_buckets[rank_id];
+
+						if (buckets == NULL) {
+							buckets = new std::vector<uint64_t*>(nb_dpus_in_rank, NULL);
 							for (int d = 0; d < nb_dpus_in_rank; d++) {
-								buckets->push_back((uint64_t*) malloc(sizeof(uint64_t) * (MAX_NB_ITEMS_PER_DPU + 1)));
+								(*buckets)[d] = ((uint64_t*) malloc(sizeof(uint64_t) * (MAX_NB_ITEMS_PER_DPU + 1)));
 								(*buckets)[d][0] = 0;
 							}
 							rank_buckets[rank_id] = buckets;
 						}
-
-						std::vector<uint64_t*>* buckets = rank_buckets[rank_id];
+						
 						uint64_t* bucket = (*buckets)[bucket_idx];
 						bucket[0]++;
 						bucket[bucket[0]] = item;
@@ -318,17 +318,18 @@ public:
 							rank_ready_mutex.lock();
 							ranks_ready.push(std::pair<int, std::vector<uint64_t*>*>(rank_id, buckets));
 							rank_ready_mutex.unlock();
-							rank_buckets.erase(rank_id);
+							rank_buckets[rank_id] = NULL;
 						}
 
 					}
 					// Add all remaining to queue
-					for (auto info : rank_buckets) {
-						int rank = info.first;
-						std::vector<uint64_t*>* buckets = info.second;
-						rank_ready_mutex.lock();
-						ranks_ready.push(std::pair<int, std::vector<uint64_t*>*>(rank, buckets));
-						rank_ready_mutex.unlock();
+					for (int rank_id = 0; rank_id < nb_ranks; rank_id++) {
+						std::vector<uint64_t*>* buckets = rank_buckets[rank_id];
+						if (buckets != NULL) {
+							rank_ready_mutex.lock();
+							ranks_ready.push(std::pair<int, std::vector<uint64_t*>*>(rank_id, buckets));
+							rank_ready_mutex.unlock();
+						}
 					}
 					done_mutex.lock();
 					done++; // Must be done **after** adding all remaining to queue!
@@ -339,16 +340,20 @@ public:
 			// Launcher
 			#pragma omp section
 			{
-				while (done < nb_workers || !ranks_ready.empty()) {
-					if (!ranks_ready.empty()) {
+				while (true) {
+					if (ranks_ready.empty()) {
+						if (done >= nb_workers) {
+							break;
+						}
+					} else {
 						auto info = ranks_ready.front();
-						rank_ready_mutex.lock();
-						ranks_ready.pop();
 						int rank_id = info.first;
 						if (_pim_rankset->is_rank_ready(rank_id)) {
-							// TODO: Rank is ready but not reserved, works because only one thread launching, needs to refine wrapper for multithreaded launch
-							
+
+							rank_ready_mutex.lock();
+							ranks_ready.pop();
 							rank_ready_mutex.unlock();
+							
 							std::vector<uint64_t*>* buckets = info.second;
 							_pim_rankset->send_data_to_rank<uint64_t>(rank_id, "items", 0, *buckets, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1));
 							broadcast_mode(rank_id, BloomMode::BLOOM_INSERT);
@@ -362,8 +367,12 @@ public:
 							delete buckets;
 
 						} else {
-							ranks_ready.push(info);
-							rank_ready_mutex.unlock();
+							if (ranks_ready.size() > 1) { // No need to pop front and push back if nothing else in queue
+								rank_ready_mutex.lock();
+								ranks_ready.pop();
+								ranks_ready.push(info);
+								rank_ready_mutex.unlock();
+							}
 						}
 					}
 				}
@@ -377,77 +386,79 @@ public:
 
 		}
 
+		// int nb_dpu = _pim_rankset->get_nb_dpu();
+		// int approximate_load = items.size() / nb_dpu;
+		// std::vector<std::vector<uint64_t>> buckets = std::vector<std::vector<uint64_t>>(nb_dpu, std::vector<uint64_t>());
+		// for (auto bucket : buckets) {
+		// 	bucket.reserve(approximate_load);
+		// }
+		// for (auto item : items) {
+		// 	auto dispatch_data = _get_rank_dpu_id_from_item(item);
+		// 	uint32_t rank_id = dispatch_data.first;
+		// 	uint32_t bucket_idx = dispatch_data.second;
+		// 	int start_idx = _pim_rankset->get_cum_dpu_idx_for_rank(rank_id);
+		// 	// buckets[start_idx + bucket_idx].push_back(item);
+		// }
+
 	}
 
 	uint32_t contains(const std::vector<uint64_t>& items) {
 
 		uint32_t total_nb_positive_lookups = 0;
+		int nb_dpu = _pim_rankset->get_nb_dpu();
 
-		// std::vector<uint64_t*> buckets;
-		// for (size_t d = 0; d < _nb_dpu; d++) {
-		// 	buckets.push_back((uint64_t*) malloc(sizeof(uint64_t) * (MAX_NB_ITEMS_PER_DPU + 1)));
-		// 	buckets[d][0] = 0;
-		// }
+		std::vector<uint64_t*> buckets;
+		for (size_t d = 0; d < nb_dpu; d++) {
+			buckets.push_back((uint64_t*) malloc(sizeof(uint64_t) * (MAX_NB_ITEMS_PER_DPU + 1)));
+			buckets[d][0] = 0;
+		}
 
-		// uint64_t bucket_size = _size / _nb_dpu;
+		for (auto item : items) {
+			auto dispatch_data = _get_rank_dpu_id_from_item(item);
+			uint32_t rank_id = dispatch_data.first;
+			uint32_t bucket_idx = dispatch_data.second;
+			if (buckets[bucket_idx][0] == MAX_NB_ITEMS_PER_DPU) {
 
-		// for (auto item : items) {
-		// 	uint64_t h0 = this->_hash_functions(item, 0) & _size_reduced;
-		// 	int bucket_idx = h0 / bucket_size;
-		// 	if (buckets[bucket_idx][0] == MAX_NB_ITEMS_PER_DPU) {
+				int start_idx = _pim_rankset->get_cum_dpu_idx_for_rank(rank_id);
+				int nb_dpu_in_rank = _pim_rankset->get_nb_dpu_in_rank(rank_id);
 
-		// 		int rank = get_rank_from_dpu(bucket_idx);
+				// Launch
+				_pim_rankset->wait_rank_ready(rank_id);
+				_pim_rankset->send_data_to_rank<uint64_t>(rank_id, "items", 0,
+					std::vector<uint64_t*>(buckets.begin() + start_idx, buckets.begin() + start_idx + nb_dpu_in_rank),
+					sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1));
+				broadcast_mode(rank_id, BloomMode::BLOOM_LOOKUP);
+				_pim_rankset->launch_rank_sync(rank_id);
 
-		// 		// Launch
-		// 		prepare_dpu_launch_async(rank);
-		// 		DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
-		// 			DPU_ASSERT(dpu_prepare_xfer(_dpu, buckets[_nb_dpu_per_rank[rank] + _dpu_idx]));
-		// 		}
-		// 		DPU_ASSERT(dpu_push_xfer(_sets[rank], DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1 + 7), DPU_XFER_DEFAULT));
-		// 		launch_rank_async(rank, BloomMode::BLOOM_LOOKUP);
+				total_nb_positive_lookups += _pim_rankset->get_reduced_sum_from_rank<uint32_t>(rank_id, "result", 0, sizeof(uint32_t));
 
-		// 		uint32_t nb_positive_lookups[_nb_dpu_per_rank[rank + 1]];
-				
-		// 		DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
-		// 			DPU_ASSERT(dpu_prepare_xfer(_dpu, &nb_positive_lookups[_dpu_idx]));
-		// 		}
-		// 		DPU_ASSERT(dpu_push_xfer(_sets[rank], DPU_XFER_FROM_DPU, "result", 0, sizeof(uint32_t), DPU_XFER_DEFAULT));
+				// Reset buckets
+				for (int d = start_idx; d < (start_idx + nb_dpu_in_rank); d++) {
+					buckets[d][0] = 0;
+				}
 
-		// 		// Reset buckets
-		// 		for (int d = _nb_dpu_per_rank[rank]; d < _nb_dpu_per_rank[rank + 1]; d++) {
-		// 			buckets[d][0] = 0;
-		// 			total_nb_positive_lookups += nb_positive_lookups[d - _nb_dpu_per_rank[rank]];
-		// 		}
+			}
+			buckets[bucket_idx][0]++;
+ 			buckets[bucket_idx][buckets[bucket_idx][0]] = item;
+		}
 
-		// 	}
-		// 	buckets[bucket_idx][0]++;
- 		// 	buckets[bucket_idx][buckets[bucket_idx][0]] = item;
-		// }
-
-		// // Launch a last round for the ranks that need it
-		// for (int rank = 0; rank < _nb_ranks; rank++) {
-		// 	for (int d = _nb_dpu_per_rank[rank]; d < _nb_dpu_per_rank[rank + 1]; d++) {
-		// 		if (buckets[d][0]) {
-		// 			prepare_dpu_launch_async(rank);
-		// 			DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
-		// 				DPU_ASSERT(dpu_prepare_xfer(_dpu, buckets[_nb_dpu_per_rank[rank] + _dpu_idx]));
-		// 			}
-		// 			DPU_ASSERT(dpu_push_xfer(_sets[rank], DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1 + 7), DPU_XFER_DEFAULT));
-		// 			launch_rank(rank, BloomMode::BLOOM_LOOKUP);
-					
-		// 			uint32_t nb_positive_lookups[_nb_dpu_per_rank[rank + 1]];
-		// 			DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
-		// 				DPU_ASSERT(dpu_prepare_xfer(_dpu, &nb_positive_lookups[_dpu_idx]));
-		// 			}
-		// 			DPU_ASSERT(dpu_push_xfer(_sets[rank], DPU_XFER_FROM_DPU, "result", 0, sizeof(uint32_t), DPU_XFER_DEFAULT));
-		// 			for (int d = _nb_dpu_per_rank[rank]; d < _nb_dpu_per_rank[rank + 1]; d++) {
-		// 				total_nb_positive_lookups += nb_positive_lookups[d - _nb_dpu_per_rank[rank]];
-		// 			}
-		// 			break;
-		// 		}
-		// 	}
-		// }
-		return total_nb_positive_lookups; // FIXME
+		// Launch a last round for the ranks that need it
+		for (int rank_id = 0; rank_id < _pim_rankset->get_nb_ranks(); rank_id++) {
+			int start_idx = _pim_rankset->get_cum_dpu_idx_for_rank(rank_id);
+			int nb_dpu_in_rank = _pim_rankset->get_nb_dpu_in_rank(rank_id);
+			for (int d = start_idx; d < (start_idx + nb_dpu_in_rank); d++) {
+				if (buckets[d][0]) {
+					_pim_rankset->wait_rank_ready(rank_id);
+					_pim_rankset->send_data_to_rank<uint64_t>(rank_id, "items", 0,
+						std::vector<uint64_t*>(buckets.begin() + start_idx, buckets.begin() + start_idx + nb_dpu_in_rank),
+						sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1));
+					broadcast_mode(rank_id, BloomMode::BLOOM_LOOKUP);
+					_pim_rankset->launch_rank_sync(rank_id);
+					total_nb_positive_lookups += _pim_rankset->get_reduced_sum_from_rank<uint32_t>(rank_id, "result", 0, sizeof(uint32_t));
+				}
+			}
+		}
+		return total_nb_positive_lookups;
 	}
 
 	/// @brief Computes the weight of the filter
@@ -509,6 +520,14 @@ private:
 
 	static inline uint32_t fastrange32(uint32_t word, uint32_t p) {
 		return (uint32_t)(((uint64_t)word * (uint64_t)p) >> 32);
+	}
+
+	std::pair<uint32_t, uint32_t> _get_rank_dpu_id_from_item(uint64_t item) {
+		uint64_t h0 = this->_hash_functions(item, 0);
+		uint32_t rank_id = fastrange32(h0, _pim_rankset->get_nb_ranks());
+		int nb_dpus_in_rank = _pim_rankset->get_nb_dpu_in_rank(rank_id);
+		uint32_t dpu_id = fastrange32(h0, nb_dpus_in_rank);
+		return std::pair<uint32_t, uint32_t>(rank_id, dpu_id);
 	}
 
 };

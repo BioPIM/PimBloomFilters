@@ -162,7 +162,7 @@ int main() {
 				}
 				cache_idx++;
 			}
-			dpu_printf_me("I have %d items\n", t_items_cnt);
+			// dpu_printf_me("I have %d items\n", t_items_cnt);
 			break;
 		
 		} case BLOOM_LOOKUP: {

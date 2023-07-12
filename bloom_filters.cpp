@@ -12,6 +12,8 @@
 
 #define NB_THREADS 8
 
+void _worker_done() {}
+
 class BloomHashFunctors {
 public:
 
@@ -274,9 +276,9 @@ public:
 		std::mutex rank_ready_mutex;
 		std::mutex done_mutex;
 
-		int nb_workers = 5;
 		int nb_items = items.size();
 		int nb_ranks = _pim_rankset->get_nb_ranks();
+		int nb_workers = 5;
 
 		omp_set_nested(1);
 		#pragma omp parallel sections
@@ -334,12 +336,14 @@ public:
 					done_mutex.lock();
 					done++; // Must be done **after** adding all remaining to queue!
 					done_mutex.unlock();
+					_worker_done();
 				}
 			}
 
 			// Launcher
 			#pragma omp section
 			{
+				int items_done = 0, rounds_launched = 0;
 				while (true) {
 					if (ranks_ready.empty()) {
 						if (done >= nb_workers) {
@@ -358,7 +362,13 @@ public:
 							_pim_rankset->send_data_to_rank<uint64_t>(rank_id, "items", 0, *buckets, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1));
 							broadcast_mode(rank_id, BloomMode::BLOOM_INSERT);
 							_pim_rankset->launch_rank_async(rank_id);
-							// std::cout << "Launching rank " << rank << std::endl;
+							rounds_launched++;
+							std::cout << "Launching rank " << rank_id << " with " << std::endl;
+							for (auto bucket : (*buckets)) {
+								items_done += bucket[0];
+								std::cout << bucket[0] << " ";
+							}
+							std::cout << std::endl;
 
 							// Cleaning
 							for (auto bucket : (*buckets)) {
@@ -376,6 +386,8 @@ public:
 						}
 					}
 				}
+				std::cout << items_done << " items done" << std::endl;
+				std::cout << rounds_launched << " rounds launched" << std::endl;
 
 				// Wait for DPUs to finish
 				_pim_rankset->for_each_rank([this](int rank_id) {
@@ -526,7 +538,8 @@ private:
 		uint64_t h0 = this->_hash_functions(item, 0);
 		uint32_t rank_id = fastrange32(h0, _pim_rankset->get_nb_ranks());
 		int nb_dpus_in_rank = _pim_rankset->get_nb_dpu_in_rank(rank_id);
-		uint32_t dpu_id = fastrange32(h0, nb_dpus_in_rank);
+		uint64_t h1 = this->_hash_functions(item, 1); // IMPORTANT: use a different hash otherwise some correlation can happen and some indexes may never be picked
+		uint32_t dpu_id = fastrange32(h1, nb_dpus_in_rank);
 		return std::pair<uint32_t, uint32_t>(rank_id, dpu_id);
 	}
 

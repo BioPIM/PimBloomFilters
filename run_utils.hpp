@@ -1,6 +1,6 @@
 #include <vector>
 #include <omp.h>
-#include "pim_rankset.cpp"
+#include <stdint.h>
 
 #define TIMEIT(f) \
     do { \

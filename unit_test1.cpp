@@ -7,7 +7,7 @@
 #include <random>
 #include <algorithm>
 
-#include "test.hpp"
+#include "run_utils.hpp"
 #include "bloom_filters.cpp"
 
 #define NB_ITEMS 10000

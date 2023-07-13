@@ -10,6 +10,8 @@
 #include <utility>
 #include <cstdlib>
 
+// #define IGNORE_DPU_LIB
+
 class DpuProfile {
 public:
     const static char* HARDWARE;
@@ -33,6 +35,7 @@ public:
         _sets = (dpu_set_t*) malloc(_nb_ranks * sizeof(dpu_set_t));
 
         // Alloc in parallel
+        #ifndef IGNORE_DPU_LIB
         #pragma omp parallel for num_threads(_nb_threads)
 		for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
 			DPU_ASSERT(dpu_alloc_ranks(1, dpu_profile, &_sets[rank_id]));
@@ -40,6 +43,7 @@ public:
 			    load_binary(binary_name, rank_id);
             }
 		}
+        #endif
 
         // This part must be sequential
 		_nb_dpu = 0;
@@ -47,7 +51,11 @@ public:
         _cum_dpu_idx_for_rank = std::vector<int>(_nb_ranks, 0);
 		for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
 			uint32_t nr_dpus;
+            #ifndef IGNORE_DPU_LIB
 			DPU_ASSERT(dpu_get_nr_dpus(_sets[rank_id], &nr_dpus));
+            #else
+            nr_dpus = 64; // Let's simulate 64 DPUs per rank
+            #endif
             _cum_dpu_idx_for_rank[rank_id] = _nb_dpu; // Set before add to have starting idx
 			_nb_dpu += nr_dpus;
             _nb_dpu_in_rank[rank_id] = nr_dpus;
@@ -58,6 +66,7 @@ public:
 
         srand(time(0));
 
+        #ifndef IGNORE_DPU_LIB
         if (do_trace_debug) {
             _trace_debug_status = std::vector<int>(_nb_ranks, TraceDebugStatus::NONE);
             for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
@@ -66,20 +75,23 @@ public:
                 t.detach();
             }
         }
+        #endif
 
     }
 
     ~PimRankSet() {
+        #ifndef IGNORE_DPU_LIB
         #pragma omp parallel for num_threads(_nb_threads)
         for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
             DPU_ASSERT(dpu_free(_sets[rank_id]));
         }
-        free(_sets);
         if (_do_trace_debug) {
             for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
                 _update_trace_debug_status(rank_id, TraceDebugStatus::DONE);
             }
         }
+        #endif
+        free(_sets);
     }
 
     static const int CANNOT_RESERVE = -1;
@@ -91,11 +103,15 @@ public:
 
     void load_binary(const char* binary_name, int rank) {
         // TODO: check if binary exists
+        #ifndef IGNORE_DPU_LIB
         DPU_ASSERT(dpu_load(_sets[rank], binary_name, NULL));
+        #endif
     }
 
     void broadcast_to_rank(int rank_id, const char* symbol_name, uint32_t symbol_offset, const void * src, size_t length) {
+        #ifndef IGNORE_DPU_LIB
         DPU_ASSERT(dpu_broadcast_to(_sets[rank_id], symbol_name, symbol_offset, src, length, DPU_XFER_DEFAULT));
+        #endif
     }
 
     void for_each_rank(std::function<void (int)> lambda, bool can_parallel = false) {
@@ -108,7 +124,9 @@ public:
     void launch_rank_sync(int rank_id, int token) {
         if (_is_token_valid(rank_id, token)) {
             _update_idle_status(rank_id, false);
+            #ifndef IGNORE_DPU_LIB
             DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_SYNCHRONOUS));
+            #endif
             _try_print_dpu_logs(rank_id);
             _update_idle_status(rank_id, true);
             _update_reservation(rank_id, _AVAILABLE_FOR_RESERVATION);
@@ -119,12 +137,18 @@ public:
 
     void launch_rank_async(int rank_id, int token) {
         if (_is_token_valid(rank_id, token)) {
+            #ifndef IGNORE_DPU_LIB
             DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_ASYNCHRONOUS));
             dpu_callback(_sets[rank_id], PimRankSet::_rank_done_callback, new std::pair<PimRankSet*, int>(this, rank_id), DPU_CALLBACK_ASYNC);
             _update_idle_status(rank_id, false);
             if (_do_trace_debug) {
                 _update_trace_debug_status(rank_id, TraceDebugStatus::WATCH);
             }
+            #else
+            _update_idle_status(rank_id, false);
+            usleep(500);
+            _rank_done_callback(_sets[rank_id], 0, new std::pair<PimRankSet*, int>(this, rank_id));
+            #endif
         } else {
             std::cout << "Warning: Token is invalid, you need to reserve the rank first, nothing launched" << std::endl;
         }
@@ -155,6 +179,7 @@ public:
     template<typename T>
     T get_reduced_sum_from_rank(int rank_id, const char* symbol_name, uint32_t symbol_offset, size_t length) {
         T result = 0;
+        #ifndef IGNORE_DPU_LIB
         T results[_nb_dpu_in_rank[rank_id]];
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, &results[_it_dpu_idx]));
@@ -163,15 +188,18 @@ public:
 		for (int d = 0; d < _nb_dpu_in_rank[rank_id]; d++) {
 			result += results[d];
         }
+        #endif
         return result;
     }
 
     template<typename T>
     void send_data_to_rank(int rank_id, const char* symbol_name, uint32_t symbol_offset, const std::vector<T*>& buffers, size_t length) {
+        #ifndef IGNORE_DPU_LIB
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, buffers[_it_dpu_idx]));
         }
         DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_TO_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));
+        #endif
     }
 
 private:
@@ -207,11 +235,13 @@ private:
     bool _print_dpu_logs;
 
     void _try_print_dpu_logs(int rank_id) {
+        #ifndef IGNORE_DPU_LIB
         if (_print_dpu_logs) {
             DPU_FOREACH(_sets[rank_id], _it_dpu) {
                 DPU_ASSERT(dpu_log_read(_it_dpu, stdout));
             }
         }
+        #endif
     }
 	
     // For iterations
@@ -225,6 +255,7 @@ private:
     enum TraceDebugStatus{NONE, WATCH, DONE};
 
     void _watch_trace_debug(int rank_id) {
+        #ifndef IGNORE_DPU_LIB
 		while (_trace_debug_status[rank_id] != TraceDebugStatus::DONE) {
 			if (_trace_debug_status[rank_id] == TraceDebugStatus::WATCH) {
 				_update_trace_debug_status(rank_id, TraceDebugStatus::NONE);
@@ -233,6 +264,7 @@ private:
 			usleep(100);
 		}
         delete _trace_debug_mutex[rank_id];
+        #endif
 	}
 
     void _update_trace_debug_status(int rank_id, TraceDebugStatus value) {

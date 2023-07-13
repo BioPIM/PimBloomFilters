@@ -1,4 +1,4 @@
-#define MAX_NB_ITEMS_PER_DPU (1 << 14)
+#define MAX_NB_ITEMS_PER_DPU (1 << 12)
 #define MAX_BLOOM_DPU_SIZE2 20
 
 #define LOG_DPU

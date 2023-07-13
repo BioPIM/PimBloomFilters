@@ -282,6 +282,10 @@ public:
 		int nb_items = items.size();
 		int nb_ranks = _pim_rankset->get_nb_ranks();
 		int nb_workers = 5;
+		int nb_dpu = _pim_rankset->get_nb_dpu();
+
+		// std::vector<std::mutex> bucket_mutexes(nb_dpu);
+		// std::vector<std::mutex> rank_mutexes(nb_ranks);
 
 		omp_set_nested(1);
 		#pragma omp parallel sections
@@ -290,8 +294,95 @@ public:
 			// Workers: fill buckets
 			#pragma omp section
 			{
+				// std::vector<std::vector<uint64_t*>*> rank_buckets = std::vector<std::vector<uint64_t*>*>(nb_ranks, NULL);
+
 				#pragma omp parallel num_threads(nb_workers)
 				{
+					// int tid = omp_get_thread_num();
+					
+					// for (int i = tid; i < nb_items; i += nb_workers) {
+
+					// 	uint64_t item = items[i];
+					// 	auto dispatch_data = _get_rank_dpu_id_from_item(item);
+					// 	uint32_t rank_id = dispatch_data.first;
+
+					// 	uint32_t bucket_idx = dispatch_data.second;
+					// 	int nb_dpus_in_rank = _pim_rankset->get_nb_dpu_in_rank(rank_id);
+
+					// 	// int start_idx = _pim_rankset->get_cum_dpu_idx_for_rank(rank_id);
+						
+					// 	rank_mutexes[rank_id].lock();
+					// 	std::vector<uint64_t*>* buckets = rank_buckets[rank_id];
+
+					// 	if (buckets == NULL) {
+					// 		buckets = new std::vector<uint64_t*>(nb_dpus_in_rank, NULL);
+					// 		// std::cout << "Creating new for rank " << rank_id << " bucket " << buckets << std::endl;
+					// 		for (int d = 0; d < nb_dpus_in_rank; d++) {
+					// 			(*buckets)[d] = (uint64_t*) malloc(sizeof(uint64_t) * (MAX_NB_ITEMS_PER_DPU + 1));
+					// 			// std::cout << "Malloc " << (*buckets)[d] << std::endl;
+					// 			(*buckets)[d][0] = 0;
+					// 		}
+					// 		rank_buckets[rank_id] = buckets;
+					// 	}
+
+					// 	uint64_t* bucket = (*buckets)[bucket_idx];
+					// 	// bucket_mutexes[start_idx + bucket_idx].lock();
+					// 	bucket[0]++;
+					// 	bucket[bucket[0]] = item;
+
+					// 	if (bucket[0] == MAX_NB_ITEMS_PER_DPU) {
+							
+					// 		// if (true) { // Take the rank. If fails, then someone else is already intending to launch so ignore
+					// 		// if (rank_mutexes[rank_id].try_lock()) { // Take the rank. If fails, then someone else is already intending to launch so ignore
+								
+					// 			// Lock all buckets in rank
+					// 			// for (int d = 0; d < nb_dpus_in_rank; d++) {
+					// 			// 	if (d != bucket_idx) { // Undefined behavior if locking while already owning so need to avoid that
+					// 			// 		bucket_mutexes[start_idx + d].lock();
+					// 			// 	}
+					// 			// }
+
+					// 			// All rank is locked now, we can launch safely
+					// 			// std::cout << "Queuing rank " << rank_id << " bucket " << buckets << std::endl;
+					// 			rank_ready_mutex.lock();
+					// 			ranks_ready.push(std::pair<int, std::vector<uint64_t*>*>(rank_id, buckets));
+					// 			rank_ready_mutex.unlock();
+					// 			rank_buckets[rank_id] = NULL;
+
+					// 			// Unlock all
+								
+					// 			// for (int d = 0; d < nb_dpus_in_rank; d++) {
+					// 			// 	bucket_mutexes[start_idx + d].unlock();
+					// 			// }
+					// 			// rank_mutexes[rank_id].unlock();
+
+					// 		// } else {
+					// 		// 	bucket_mutexes[start_idx + bucket_idx].unlock();
+					// 		// }
+							
+
+					// 	} else {
+					// 		// bucket_mutexes[start_idx + bucket_idx].unlock();
+					// 	}
+
+					// 	rank_mutexes[rank_id].unlock();
+
+					// }
+
+					// #pragma omp barrier
+
+					// // Add all remaining to queue
+					// for (int rank_id = tid; rank_id < nb_ranks; rank_id += nb_workers) {
+					// 	std::vector<uint64_t*>* buckets = rank_buckets[rank_id];
+					// 	if (buckets != NULL) {
+					// 		rank_ready_mutex.lock();
+					// 		ranks_ready.push(std::pair<int, std::vector<uint64_t*>*>(rank_id, buckets));
+					// 		rank_ready_mutex.unlock();
+					// 	}
+					// }
+
+					// ---------
+					
 					int tid = omp_get_thread_num();
 					std::vector<std::vector<uint64_t*>*> rank_buckets = std::vector<std::vector<uint64_t*>*>(nb_ranks, NULL);
 					
@@ -318,6 +409,7 @@ public:
 						bucket[bucket[0]] = item;
 
 						if (bucket[0] == MAX_NB_ITEMS_PER_DPU) {
+							// std::cout << "Queuing rank " << rank_id << " bucket " << buckets << std::endl;
 							rank_ready_mutex.lock();
 							ranks_ready.push(std::pair<int, std::vector<uint64_t*>*>(rank_id, buckets));
 							rank_ready_mutex.unlock();
@@ -334,6 +426,9 @@ public:
 							rank_ready_mutex.unlock();
 						}
 					}
+
+					// ---------
+
 					done_mutex.lock();
 					(*done_addr)++; // Must be done **after** adding all remaining to queue!
 					done_mutex.unlock();
@@ -344,7 +439,7 @@ public:
 			// Launcher
 			#pragma omp section
 			{
-				#pragma omp parallel num_threads(1)
+				// #pragma omp parallel num_threads(1)
 				{
 					int token;
 					int items_done = 0, rounds_launched = 0;
@@ -367,7 +462,8 @@ public:
 								broadcast_mode(rank_id, BloomMode::BLOOM_INSERT);
 								_pim_rankset->launch_rank_async(rank_id, token);
 								rounds_launched++;
-								// std::cout << "Launching rank " << rank_id << " with " << std::endl;
+								// std::cout << "Launching rank " << rank_id << " bucket " << buckets << std::endl;
+								
 								for (auto bucket : (*buckets)) {
 									items_done += bucket[0];
 									// std::cout << bucket[0] << " ";
@@ -376,6 +472,7 @@ public:
 
 								// Cleaning
 								for (auto bucket : (*buckets)) {
+									// std::cout << "Free " << bucket << std::endl;
 									free(bucket);
 								}
 								delete buckets;

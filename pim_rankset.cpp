@@ -8,6 +8,7 @@
 #include <mutex>
 #include <thread>
 #include <utility>
+#include <cstdlib>
 
 class DpuProfile {
 public:
@@ -53,6 +54,9 @@ public:
 		}
 
         _is_rank_idle = std::vector<bool>(_nb_ranks, true);
+        _reservations = std::vector<int>(_nb_ranks, _AVAILABLE_FOR_RESERVATION);
+
+        srand(time(0));
 
         if (do_trace_debug) {
             _trace_debug_status = std::vector<int>(_nb_ranks, TraceDebugStatus::NONE);
@@ -78,6 +82,8 @@ public:
         }
     }
 
+    static const int CANNOT_RESERVE = -1;
+
     int get_nb_dpu() { return _nb_dpu; }
     int get_nb_ranks() { return _nb_ranks; }
     int get_nb_dpu_in_rank(int rank_id) { return _nb_dpu_in_rank[rank_id]; }
@@ -99,30 +105,51 @@ public:
         }
     }
 
-    void launch_rank_sync(int rank_id) {
-        wait_rank_ready(rank_id);
-        _update_idle_status(rank_id, false);
-        DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_SYNCHRONOUS));
-        _try_print_dpu_logs(rank_id);
-        _update_idle_status(rank_id, true);
+    void launch_rank_sync(int rank_id, int token) {
+        if (_is_token_valid(rank_id, token)) {
+            _update_idle_status(rank_id, false);
+            DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_SYNCHRONOUS));
+            _try_print_dpu_logs(rank_id);
+            _update_idle_status(rank_id, true);
+            _update_reservation(rank_id, _AVAILABLE_FOR_RESERVATION);
+        } else {
+            std::cout << "Warning: Token is invalid, you need to reserve the rank first, nothing launched" << std::endl;
+        }
     }
 
-    void launch_rank_async(int rank_id) {
-        wait_rank_ready(rank_id);
-		DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_ASYNCHRONOUS));
-		dpu_callback(_sets[rank_id], PimRankSet::_rank_done_callback, new std::pair<PimRankSet*, int>(this, rank_id), DPU_CALLBACK_ASYNC);
-		_update_idle_status(rank_id, false);
-        if (_do_trace_debug) {
-           _update_trace_debug_status(rank_id, TraceDebugStatus::WATCH);
+    void launch_rank_async(int rank_id, int token) {
+        if (_is_token_valid(rank_id, token)) {
+            DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_ASYNCHRONOUS));
+            dpu_callback(_sets[rank_id], PimRankSet::_rank_done_callback, new std::pair<PimRankSet*, int>(this, rank_id), DPU_CALLBACK_ASYNC);
+            _update_idle_status(rank_id, false);
+            if (_do_trace_debug) {
+                _update_trace_debug_status(rank_id, TraceDebugStatus::WATCH);
+            }
+        } else {
+            std::cout << "Warning: Token is invalid, you need to reserve the rank first, nothing launched" << std::endl;
         }
 	}
 
-    void wait_rank_ready(int rank_id) {
+    int wait_reserve_rank(int rank_id) {
+        int token;
+        while ((token = try_reserve_rank(rank_id)) == CANNOT_RESERVE) { usleep(100); }
+        return token;
+    }
+
+    void wait_rank_done(int rank_id) {
         while (!_is_rank_idle[rank_id]) { usleep(100); }
     }
 
-    bool is_rank_ready(int rank_id) {
-        return _is_rank_idle[rank_id];
+    int try_reserve_rank(int rank_id) {
+        int token = CANNOT_RESERVE;
+        _reservation_mutex.lock();
+        bool is_reserved = (_is_rank_idle[rank_id] && (_reservations[rank_id] == _AVAILABLE_FOR_RESERVATION));
+        if (is_reserved) {
+            token = rand();
+            _reservations[rank_id] = token;
+        }
+        _reservation_mutex.unlock();
+        return token;
     }
 
     template<typename T>
@@ -156,19 +183,20 @@ private:
 	std::vector<int> _nb_dpu_in_rank;
 	std::vector<int> _cum_dpu_idx_for_rank;
 
-    std::mutex idle_mutex;
+    std::mutex _idle_mutex;
     std::vector<bool> _is_rank_idle;
 
     void _update_idle_status(int rank_id, bool value) {
-        idle_mutex.lock();
+        _idle_mutex.lock();
         _is_rank_idle[rank_id] = value;
-        idle_mutex.unlock();
+        _idle_mutex.unlock();
     }
 
     static dpu_error_t _rank_done_callback(struct dpu_set_t set, uint32_t _id, void* arg) {
 		std::pair<PimRankSet*, int>* info = (std::pair<PimRankSet*, int>*) arg;
 		// std::cout << "Rank " << info->second << " is done" << std::endl;
 		info->first->_update_idle_status(info->second, true);
+		info->first->_update_reservation(info->second, info->first->_AVAILABLE_FOR_RESERVATION);
         info->first->_try_print_dpu_logs(info->second);
 		delete info;
 		return DPU_OK;
@@ -213,6 +241,18 @@ private:
             _trace_debug_status[rank_id] = value;
         }
         _trace_debug_mutex[rank_id]->unlock();
+    }
+
+    std::mutex _reservation_mutex;
+    std::vector<int> _reservations;
+    const int _AVAILABLE_FOR_RESERVATION = -2;
+    void _update_reservation(int rank_id, int value) {
+        _reservation_mutex.lock();
+        _reservations[rank_id] = value;
+        _reservation_mutex.unlock();
+    }
+    bool _is_token_valid(int rank_id, int token) {
+        return (token >= 0) &&  (_reservations[rank_id] == token);
     }
 
 };

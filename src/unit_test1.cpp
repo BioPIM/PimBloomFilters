@@ -1,5 +1,4 @@
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "thirdparty/doctest/doctest.h"
+#include <catch2/catch_test_macros.hpp>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -24,19 +23,19 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	int nb_ranks, bloom_size2, nb_hash;
 	const char* dpu_profile = DpuProfile::SIMULATOR;
 
-	SUBCASE("") {
+	SECTION("") {
 		nb_ranks = 1;
 		bloom_size2 = 20;
-		SUBCASE("") { nb_hash = 1; }
-		SUBCASE("") { nb_hash = 8; }
+		SECTION("") { nb_hash = 1; }
+		SECTION("") { nb_hash = 8; }
 	}
-	SUBCASE("") {
+	SECTION("") {
 		nb_ranks = 2;
 		bloom_size2 = 24;
-		SUBCASE("") { nb_hash = 1; }
-		SUBCASE("") { nb_hash = 8; }
+		SECTION("") { nb_hash = 1; }
+		SECTION("") { nb_hash = 8; }
 	}
-	SUBCASE("") {
+	SECTION("") {
 		nb_ranks = 2;
 		bloom_size2 = 8;
 		nb_hash = 4;
@@ -78,7 +77,10 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	double fpr = (double) nb_positive_lookups / no_items.size();
 	CHECK(fpr <= 1.0);
 	if (items.size() <= (1 << bloom_size2)) {
-		WARN(fpr <= 0.1);
+		if (fpr > 0.1) {
+			CAPTURE(fpr);
+			WARN("False positive rate is significantly high");
+		}
 	}
 
 	delete bloom_filter;

@@ -70,7 +70,6 @@ public:
 					const uint32_t nb_hash = 4,
 					const Implementation implem = BASIC,
 					const char* dpu_profile = DpuProfile::HARDWARE,
-					bool print_dpu_logs = false,
                		bool do_trace_debug = false) : _size2(size2), _nb_hash(nb_hash), _hash_functions(nb_hash) {
 		
 		if (size2 < 4) {
@@ -88,7 +87,7 @@ public:
 		_size = (1 << _size2);
 		_size_reduced = _size - 1;
 
-		_pim_rankset = new PimRankSet(nb_ranks, NB_THREADS, dpu_profile, get_dpu_binary_name(implem), print_dpu_logs, do_trace_debug);
+		_pim_rankset = new PimRankSet(nb_ranks, NB_THREADS, dpu_profile, get_dpu_binary_name(implem).c_str(), do_trace_debug);
 
 		if (_size < _pim_rankset->get_nb_dpu()) {
 			throw std::invalid_argument(std::string("Error: Asking too little space per DPU, use less DPUs or a bigger filter"));
@@ -618,13 +617,17 @@ private:
 	int _nb_hash;
 	BloomHashFunctors _hash_functions;
 
-	const char* get_dpu_binary_name(const Implementation implem) {
+	const std::string get_dpu_binary_name(const Implementation implem) {
+		std::string filename;
 		switch (implem) {
 			case BASIC_CACHE_ITEMS:
-				return "bloom_filters_dpu2"; 
+				filename = "bloom_filters_dpu2";
+				break;
 			default:
-				return "bloom_filters_dpu1";
+				filename = "bloom_filters_dpu1";
+				break;
 		}
+		return std::string(DPU_BINARIES_DIR) + "/" + filename;
 	}
 
 	void broadcast_mode(int rank_id, BloomMode mode) {

@@ -7,7 +7,6 @@
 #include <barrier.h>
 #include <string.h>
 
-#include "bloom_filters_common.h"
 #include "bloom_filters_dpu.h"
 
 //---------------------------------------------------------------------------//

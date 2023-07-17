@@ -29,8 +29,7 @@ public:
                int nb_threads = 8,
                const char* dpu_profile = DpuProfile::HARDWARE,
                const char* binary_name = NULL,
-               bool print_dpu_logs = false,
-               bool do_trace_debug = false) : _nb_ranks(nb_ranks), _nb_threads(nb_threads), _print_dpu_logs(print_dpu_logs), _do_trace_debug(do_trace_debug) {
+               bool do_trace_debug = false) : _nb_ranks(nb_ranks), _nb_threads(nb_threads), _do_trace_debug(do_trace_debug) {
         
         _sets = (dpu_set_t*) malloc(_nb_ranks * sizeof(dpu_set_t));
 
@@ -75,6 +74,12 @@ public:
                 t.detach();
             }
         }
+        #endif
+
+        #ifdef LOG_DPU
+        _print_dpu_logs = true;
+        #else
+        _print_dpu_logs = false;
         #endif
 
     }

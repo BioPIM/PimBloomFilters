@@ -1,7 +1,9 @@
-#include <stdint.h>
-
 #ifndef BLOOM_FILTER_DPU_H
 #define BLOOM_FILTER_DPU_H
+
+#include <stdint.h>
+#include "dpu_utils.h"
+#include "../bloom_filters_common.h"
 
 uint8_t bit_mask [8] = {
     0x01,  //00000001

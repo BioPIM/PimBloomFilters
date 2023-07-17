@@ -21,7 +21,7 @@ foreach(TARGET ${TARGETS})
     target_include_directories(${TARGET} PUBLIC "." ${DPU_H_INCLUDE})
     if (LOG_DPU)
         target_compile_definitions(${TARGET} PRIVATE "LOG_DPU")
-    endif()
+    endif(LOG_DPU)
     target_compile_definitions(${TARGET} PRIVATE
         DPU_BINARIES_DIR="${DPU_BINARIES_ABS_DIR}"
     )
@@ -29,4 +29,4 @@ foreach(TARGET ${TARGETS})
     target_link_libraries(${TARGET} PRIVATE Catch2::Catch2WithMain)
     target_link_libraries(${TARGET} PRIVATE ${DPU_LINK})
 
-endforeach()
+endforeach(TARGET ${TARGETS})

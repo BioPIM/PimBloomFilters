@@ -15,6 +15,6 @@ foreach(TARGET ${TARGETS})
     )
     if (LOG_DPU)
         target_compile_definitions(${TARGET} PRIVATE "LOG_DPU")
-    endif()
+    endif(LOG_DPU)
 
-endforeach()
+endforeach(TARGET ${TARGETS})

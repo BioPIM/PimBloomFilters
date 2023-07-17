@@ -14,4 +14,9 @@ option(LOG_DPU "Print log messages from DPUs")
 
 add_subdirectory(src)
 
+set(UTILITY_SCRIPTS dtrace.sh)
+foreach(SCRIPT ${UTILITY_SCRIPTS})
+    configure_file(${SCRIPT} ${SCRIPT} COPYONLY)
+endforeach(SCRIPT ${UTILITY_SCRIPTS})
+
 unset(LOG_DPU CACHE)

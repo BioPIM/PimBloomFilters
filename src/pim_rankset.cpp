@@ -24,6 +24,8 @@ const char* DpuProfile::SIMULATOR = "backend=simulator";
 class PimRankSet {
 
 public:
+
+    PimRankSet() {}
     
     PimRankSet(int nb_ranks,
                int nb_threads = 8,
@@ -31,7 +33,7 @@ public:
                const char* binary_name = NULL,
                bool do_trace_debug = false) : _nb_ranks(nb_ranks), _nb_threads(nb_threads), _do_trace_debug(do_trace_debug) {
         
-        _sets = (dpu_set_t*) malloc(_nb_ranks * sizeof(dpu_set_t));
+        _sets.resize(_nb_ranks);
 
         // Alloc in parallel
         #ifndef IGNORE_DPU_LIB
@@ -96,7 +98,6 @@ public:
             }
         }
         #endif
-        free(_sets);
     }
 
     static const int CANNOT_RESERVE = -1;
@@ -166,13 +167,13 @@ public:
     }
 
     void wait_rank_done(int rank_id) {
-        while (!_is_rank_idle[rank_id]) { usleep(100); }
+        while (!_get_idle_status(rank_id)) { usleep(100); }
     }
 
     int try_reserve_rank(int rank_id) {
         int token = CANNOT_RESERVE;
         _reservation_mutex.lock();
-        bool is_reserved = (_is_rank_idle[rank_id] && (_reservations[rank_id] == _AVAILABLE_FOR_RESERVATION));
+        bool is_reserved = (_get_idle_status(rank_id) && (_reservations[rank_id] == _AVAILABLE_FOR_RESERVATION));
         if (is_reserved) {
             token = rand();
             _reservations[rank_id] = token;
@@ -197,19 +198,32 @@ public:
         return result;
     }
 
+    #define DPU_UID(rank_id,dpu_id) ((rank_id) * 100 + (dpu_id))
+
     template<typename T>
-    void send_data_to_rank(int rank_id, const char* symbol_name, uint32_t symbol_offset, const std::vector<T*>& buffers, size_t length) {
+    void send_data_to_rank(int rank_id, const char* symbol_name, uint32_t symbol_offset, const std::vector<std::vector<T>*>& buffers, size_t length) {
         #ifndef IGNORE_DPU_LIB
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
-            DPU_ASSERT(dpu_prepare_xfer(_it_dpu, buffers[_it_dpu_idx]));
+            DPU_ASSERT(dpu_prepare_xfer(_it_dpu, buffers[_it_dpu_idx]->data()));
+            // std::cout << "[=>" << DPU_UID(rank_id, _it_dpu_idx) << ": item cnt sent = " << buffers[_it_dpu_idx]->data()[0] << " " << buffers[_it_dpu_idx]->data()[1] << std::endl;
+        }
+        DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_TO_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));
+        #endif
+    }
+
+    template<typename T>
+    void send_data_to_rank(int rank_id, const char* symbol_name, uint32_t symbol_offset, T* buffer, size_t length) {
+        #ifndef IGNORE_DPU_LIB
+        DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
+            DPU_ASSERT(dpu_prepare_xfer(_it_dpu, &buffer[_it_dpu_idx]));
         }
         DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_TO_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));
         #endif
     }
 
 private:
-
-    dpu_set_t* _sets;
+    
+    std::vector<dpu_set_t> _sets;
     int _nb_ranks;
 
 	int _nb_dpu;
@@ -225,12 +239,21 @@ private:
         _idle_mutex.unlock();
     }
 
+    bool _get_idle_status(int rank_id) {
+        bool result;
+         _idle_mutex.lock();
+        result = _is_rank_idle[rank_id];
+        _idle_mutex.unlock();
+        return result;
+    }
+
     static dpu_error_t _rank_done_callback(struct dpu_set_t set, uint32_t _id, void* arg) {
 		std::pair<PimRankSet*, int>* info = (std::pair<PimRankSet*, int>*) arg;
+        // std::cout << "Reading logs of rank " << info->second << std::endl;
+        info->first->_try_print_dpu_logs(info->second);
 		// std::cout << "Rank " << info->second << " is done" << std::endl;
 		info->first->_update_idle_status(info->second, true);
 		info->first->_update_reservation(info->second, info->first->_AVAILABLE_FOR_RESERVATION);
-        info->first->_try_print_dpu_logs(info->second);
 		delete info;
 		return DPU_OK;
 	}
@@ -283,13 +306,23 @@ private:
     std::mutex _reservation_mutex;
     std::vector<int> _reservations;
     const int _AVAILABLE_FOR_RESERVATION = -2;
+    
     void _update_reservation(int rank_id, int value) {
         _reservation_mutex.lock();
         _reservations[rank_id] = value;
         _reservation_mutex.unlock();
     }
+
+    int _get_reservation_status(int rank_id) {
+        int result;
+        _reservation_mutex.lock();
+        result = _reservations[rank_id];
+        _reservation_mutex.unlock();
+        return result;
+    }
+
     bool _is_token_valid(int rank_id, int token) {
-        return (token >= 0) &&  (_reservations[rank_id] == token);
+        return (token >= 0) &&  (_get_reservation_status(rank_id) == token);
     }
 
 };

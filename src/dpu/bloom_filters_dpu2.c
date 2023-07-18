@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <stdint.h>
 #include <defs.h>
 #include <perfcounter.h>
@@ -26,9 +25,10 @@ BARRIER_INIT(reduce_all_barrier, NR_TASKLETS);
 __host uint64_t _dpu_size2;
 __host enum BloomMode _mode;
 __host uint64_t _nb_hash;
+
+__host uint64_t _dpu_uid;
 // MRAM
 __mram_noinit uint64_t items[MAX_NB_ITEMS_PER_DPU + 8];
-__mram_noinit uint32_t items_keys[MAX_NB_ITEMS_PER_DPU + 8];
 
 // Own variables
 // WRAM
@@ -84,7 +84,10 @@ int main() {
 
 	perfcounter_config(COUNT_CYCLES, true);
 
-	dpu_printf_0("Mode is %d\n", _mode);
+	// dpu_printf_0("Mode is %d\n", _mode);
+
+	__dma_aligned uint8_t bloom_cache[INIT_BLOOM_CACHE_SIZE];
+	uint64_t* items_cache = (uint64_t*) bloom_cache;
 
 	switch (_mode) {
 
@@ -94,19 +97,18 @@ int main() {
 			// memset(t_blooma, 0, ((1 << _dpu_size2) >> 3) * sizeof(unsigned char));
 
 			// Better version: use a cache filled with zeros in wram
-			uint8_t local_zeros[INIT_BLOOM_CACHE_SIZE];
 			uint64_t total_size = ((1 << _dpu_size2) >> 3);
-			memset(local_zeros, 0, INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
+			memset(bloom_cache, 0, INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
 			for (int i = 0; i < total_size; i += INIT_BLOOM_CACHE_SIZE) {
 				if ((i + INIT_BLOOM_CACHE_SIZE) >= total_size) {
-					mram_write(local_zeros, &t_blooma[i], CEIL8(total_size - i) * sizeof(unsigned char));
+					mram_write(bloom_cache, &t_blooma[i], CEIL8(total_size - i) * sizeof(unsigned char));
 				} else {
-					mram_write(local_zeros, &t_blooma[i], INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
+					mram_write(bloom_cache, &t_blooma[i], INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
 				}
 			}
 			
 			if (me() == 0) {
-				dpu_printf("Filter size2 = %lu\n", _dpu_size2);
+				// dpu_printf("Filter size2 = %lu\n", _dpu_size2);
 				_dpu_size_reduced = (1 << _dpu_size2) - 1;
 			}
 			// dpu_printf("[%02d] My Bloom start adress is %p\n", me(), t_blooma);
@@ -116,7 +118,6 @@ int main() {
 		} case BLOOM_WEIGHT: {
 
 			t_results[me()] = 0;
-			uint8_t bloom_cache[INIT_BLOOM_CACHE_SIZE];
 			if (_dpu_size2 < 3) {
 				mram_read(t_blooma, bloom_cache, 8 * sizeof(unsigned char));
 				t_results[me()] += __builtin_popcount(bloom_cache[0] & ((1 << (_dpu_size2 + 1)) - 1));
@@ -135,19 +136,21 @@ int main() {
 		} case BLOOM_INSERT: {
 
 			int t_items_cnt = 0;
+			uint64_t nb_items = 0;
 
-			__dma_aligned uint64_t items_cache[ITEMS_CACHE_SIZE];
-			// __dma_aligned uint32_t items_keys_cache[ITEMS_CACHE_SIZE];
+			
 			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
-			// mram_read(items_keys, items_keys_cache, ITEMS_CACHE_SIZE * sizeof(uint32_t));
-			uint64_t nb_items = items_cache[0];
-			// uint64_t nb_items = MAX_NB_ITEMS_PER_DPU;
-			dpu_printf_0("We have %lu items\n", nb_items);
+			nb_items = items_cache[0];
+			dpu_printf_0("[=>%lu: We have %lu items\n", _dpu_uid, items[0]);
+			// dpu_printf_0("We have %lu items\n", nb_items);
+			// if (nb_items > 8192 || nb_items == 0) {
+			// 	dpu_printf_0("[=>%lu: ERROR We have %lu items | next is %lu\n", _dpu_uid, nb_items, items[1]);
+			// 	break;
+			// }
 			int cache_idx = 1;
 			for (int i = 0; i < nb_items; i++) {
 				if (cache_idx == ITEMS_CACHE_SIZE) {
 					mram_read(&items[i + 1], items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
-					// mram_read(&items_keys[i + 1], items_keys_cache, ITEMS_CACHE_SIZE * sizeof(uint32_t));
 					cache_idx = 0;
 				}
 				uint64_t item = items_cache[cache_idx];
@@ -169,7 +172,6 @@ int main() {
 			int t_items_cnt = 0;
 			
 			t_results[me()] = 0;
-			uint64_t items_cache[ITEMS_CACHE_SIZE];
 			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
 			uint64_t nb_items = items_cache[0];
 			dpu_printf_0("We have %lu items\n", nb_items);

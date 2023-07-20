@@ -1,5 +1,8 @@
 find_package(OpenMP REQUIRED)
 find_package(Catch2 3 REQUIRED)
+find_package(spdlog REQUIRED)
+
+set(FSANITIZE OFF)
 
 set(DPU_BINARIES_DIR "dpu")
 get_filename_component(DPU_BINARIES_ABS_DIR ${CMAKE_CURRENT_BINARY_DIR}/${DPU_BINARIES_DIR} REALPATH)
@@ -18,8 +21,10 @@ foreach(TARGET ${TARGETS})
 
     add_executable(${TARGET} ${TARGET}.cpp)
 
-    target_include_directories(${TARGET} PUBLIC "." ${DPU_H_INCLUDE})
-    # target_compile_options(${TARGET} PRIVATE -fsanitize=leak)
+    target_include_directories(${TARGET} PRIVATE "." ${DPU_H_INCLUDE})
+    if((FSANITIZE))
+        target_compile_options(${TARGET} PRIVATE -fsanitize=leak)
+    endif((FSANITIZE))
     if (LOG_DPU)
         target_compile_definitions(${TARGET} PRIVATE "LOG_DPU")
     endif(LOG_DPU)
@@ -29,6 +34,10 @@ foreach(TARGET ${TARGETS})
     target_link_libraries(${TARGET} PRIVATE OpenMP::OpenMP_CXX)
     target_link_libraries(${TARGET} PRIVATE Catch2::Catch2WithMain)
     target_link_libraries(${TARGET} PRIVATE ${DPU_LINK})
-    # target_link_options(${TARGET} PRIVATE -fsanitize=leak)
+    target_link_libraries(${TARGET} PRIVATE spdlog::spdlog $<$<BOOL:${MINGW}>:ws2_32>)
+    target_link_libraries(${TARGET} PRIVATE stdc++fs)
+    if((FSANITIZE))
+        target_link_options(${TARGET} PRIVATE -fsanitize=leak)
+    endif((FSANITIZE))
 
 endforeach(TARGET ${TARGETS})

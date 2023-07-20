@@ -1,4 +1,5 @@
 #include "thirdparty/cxxopts/cxxopts.hpp"
+#include "spdlog/spdlog.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -21,7 +22,6 @@ int main(int argc, char** argv) {
         ("m,size2", "Size2 of the filter", cxxopts::value<int>()->default_value("20"))
         ("n,items", "Number of items", cxxopts::value<int>()->default_value("10000"))
         ("s,simulator", "Use the simulator", cxxopts::value<bool>()->default_value("false"))
-        ("t,trace", "Enable trace watchers", cxxopts::value<bool>()->default_value("false"))
         ("h,help", "Print usage")
     ;
 
@@ -40,9 +40,11 @@ int main(int argc, char** argv) {
 
 	std::vector<uint64_t> items = get_seq_items(nb_items);
 
+    spdlog::set_level(spdlog::level::info);
+
 	std::cout << "> Creating filter..." << std::endl;
 	PimBloomFilter *bloom_filter;
-    TIMEIT(bloom_filter = new PimBloomFilter(nb_ranks, bloom_size2, nb_hash, PimBloomFilter::BASIC_CACHE_ITEMS, dpu_profile, result["trace"].as<bool>()));
+    TIMEIT(bloom_filter = new PimBloomFilter(nb_ranks, bloom_size2, nb_hash, dpu_profile));
 
     std::cout << "> Inserting many items..." << std::endl;
 	TIMEIT(bloom_filter->insert(items));

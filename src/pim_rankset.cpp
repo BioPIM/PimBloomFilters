@@ -1,16 +1,20 @@
 #pragma once
 
+#include "spdlog/spdlog.h"
+
 #include <dpu>
 #include <vector>
 #include <omp.h>
 #include <functional>
 #include <unistd.h>
 #include <mutex>
-#include <thread>
 #include <utility>
 #include <cstdlib>
+#include <filesystem>
 
-// #define IGNORE_DPU_LIB
+// #define IGNORE_DPU_CALLS
+
+void _trace_rank_done() {}
 
 class DpuProfile {
 public:
@@ -21,24 +25,36 @@ public:
 const char* DpuProfile::HARDWARE  = "backend=hw";
 const char* DpuProfile::SIMULATOR = "backend=simulator";
 
-class PimRankSet {
+class PimCallbackData {
 
 public:
 
-    PimRankSet() {}
+    PimCallbackData(size_t rank_id, void* arg, std::function<void (size_t, void*)> func) : _rank_id(rank_id), _arg(arg), _func(func) {}
+    void run() { _func(_rank_id, _arg); }
+    size_t get_rank_id() { return _rank_id; }
+
+private:
+    size_t _rank_id;
+    void* _arg;
+    std::function<void (size_t, void*)> _func;
+
+};
+
+class PimRankSet {
+
+public:
     
-    PimRankSet(int nb_ranks,
-               int nb_threads = 8,
+    PimRankSet(size_t nb_ranks,
+               size_t nb_threads = 8UL,
                const char* dpu_profile = DpuProfile::HARDWARE,
-               const char* binary_name = NULL,
-               bool do_trace_debug = false) : _nb_ranks(nb_ranks), _nb_threads(nb_threads), _do_trace_debug(do_trace_debug) {
+               const char* binary_name = NULL) : _nb_ranks(nb_ranks), _nb_threads(nb_threads) {
         
         _sets.resize(_nb_ranks);
 
         // Alloc in parallel
-        #ifndef IGNORE_DPU_LIB
+        #ifndef IGNORE_DPU_CALLS
         #pragma omp parallel for num_threads(_nb_threads)
-		for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
+		for (size_t rank_id = 0; rank_id < _nb_ranks; rank_id++) {
 			DPU_ASSERT(dpu_alloc_ranks(1, dpu_profile, &_sets[rank_id]));
             if (binary_name != NULL) {
 			    load_binary(binary_name, rank_id);
@@ -48,11 +64,11 @@ public:
 
         // This part must be sequential
 		_nb_dpu = 0;
-        _nb_dpu_in_rank = std::vector<int>(_nb_ranks, 0);
-        _cum_dpu_idx_for_rank = std::vector<int>(_nb_ranks, 0);
-		for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
+        _nb_dpu_in_rank = std::vector<size_t>(_nb_ranks, 0);
+        _cum_dpu_idx_for_rank = std::vector<size_t>(_nb_ranks, 0);
+		for (size_t rank_id = 0; rank_id < _nb_ranks; rank_id++) {
 			uint32_t nr_dpus;
-            #ifndef IGNORE_DPU_LIB
+            #ifndef IGNORE_DPU_CALLS
 			DPU_ASSERT(dpu_get_nr_dpus(_sets[rank_id], &nr_dpus));
             #else
             nr_dpus = 64; // Let's simulate 64 DPUs per rank
@@ -62,21 +78,9 @@ public:
             _nb_dpu_in_rank[rank_id] = nr_dpus;
 		}
 
-        _is_rank_idle = std::vector<bool>(_nb_ranks, true);
-        _reservations = std::vector<int>(_nb_ranks, _AVAILABLE_FOR_RESERVATION);
+        _statuses = std::vector<int>(_nb_ranks, _STATUS_AVAILABLE);
 
         srand(time(0));
-
-        #ifndef IGNORE_DPU_LIB
-        if (do_trace_debug) {
-            _trace_debug_status = std::vector<int>(_nb_ranks, TraceDebugStatus::NONE);
-            for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
-                _trace_debug_mutex.push_back(new std::mutex());
-                std::thread t(&PimRankSet::_watch_trace_debug, this, rank_id);
-                t.detach();
-            }
-        }
-        #endif
 
         #ifdef LOG_DPU
         _print_dpu_logs = true;
@@ -87,111 +91,128 @@ public:
     }
 
     ~PimRankSet() {
-        #ifndef IGNORE_DPU_LIB
+        #ifndef IGNORE_DPU_CALLS
         #pragma omp parallel for num_threads(_nb_threads)
-        for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
+        for (size_t rank_id = 0; rank_id < _nb_ranks; rank_id++) {
             DPU_ASSERT(dpu_free(_sets[rank_id]));
         }
-        if (_do_trace_debug) {
-            for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
-                _update_trace_debug_status(rank_id, TraceDebugStatus::DONE);
-            }
+        #endif
+    }
+
+    static const int RESERVATION_FAILED = -1;
+
+    size_t get_nb_dpu() { return _nb_dpu; }
+    size_t get_nb_ranks() { return _nb_ranks; }
+    size_t get_nb_dpu_in_rank(int rank_id) { return _nb_dpu_in_rank[rank_id]; }
+    size_t get_cum_dpu_idx_for_rank(int rank_id) { return _cum_dpu_idx_for_rank[rank_id]; }
+
+    void load_binary(const char* binary_name, size_t rank) {
+        if (std::filesystem::exists(binary_name)) {
+            #ifndef IGNORE_DPU_CALLS
+            DPU_ASSERT(dpu_load(_sets[rank], binary_name, NULL));
+            #endif
+        } else {
+            spdlog::critical("DPU binary program does not exist: {}", binary_name);
         }
-        #endif
     }
 
-    static const int CANNOT_RESERVE = -1;
-
-    int get_nb_dpu() { return _nb_dpu; }
-    int get_nb_ranks() { return _nb_ranks; }
-    int get_nb_dpu_in_rank(int rank_id) { return _nb_dpu_in_rank[rank_id]; }
-    int get_cum_dpu_idx_for_rank(int rank_id) { return _cum_dpu_idx_for_rank[rank_id]; }
-
-    void load_binary(const char* binary_name, int rank) {
-        // TODO: check if binary exists
-        #ifndef IGNORE_DPU_LIB
-        DPU_ASSERT(dpu_load(_sets[rank], binary_name, NULL));
-        #endif
-    }
-
-    void broadcast_to_rank(int rank_id, const char* symbol_name, uint32_t symbol_offset, const void * src, size_t length) {
-        #ifndef IGNORE_DPU_LIB
+    void broadcast_to_rank_sync(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, const void * src, size_t length) {
+        #ifndef IGNORE_DPU_CALLS
         DPU_ASSERT(dpu_broadcast_to(_sets[rank_id], symbol_name, symbol_offset, src, length, DPU_XFER_DEFAULT));
         #endif
     }
 
-    void for_each_rank(std::function<void (int)> lambda, bool can_parallel = false) {
+    void broadcast_to_rank_async(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, const void * src, size_t length) {
+        #ifndef IGNORE_DPU_CALLS
+        DPU_ASSERT(dpu_broadcast_to(_sets[rank_id], symbol_name, symbol_offset, src, length, DPU_XFER_ASYNC));
+        #endif
+    }
+
+    void for_each_rank(std::function<void (size_t)> lambda, bool can_parallel = false) {
         #pragma omp parallel for num_threads(_nb_threads) if(can_parallel)
-        for (int rank_id = 0; rank_id < _nb_ranks; rank_id++) {
+        for (size_t rank_id = 0; rank_id < _nb_ranks; rank_id++) {
             lambda(rank_id);
         }
     }
 
-    void launch_rank_sync(int rank_id, int token) {
+    void launch_rank_sync(size_t rank_id, int token) {
         if (_is_token_valid(rank_id, token)) {
-            _update_idle_status(rank_id, false);
-            #ifndef IGNORE_DPU_LIB
+            _update_status(rank_id, _STATUS_RUNNING);
+            #ifndef IGNORE_DPU_CALLS
             DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_SYNCHRONOUS));
-            #endif
             _try_print_dpu_logs(rank_id);
-            _update_idle_status(rank_id, true);
-            _update_reservation(rank_id, _AVAILABLE_FOR_RESERVATION);
+            #else
+            usleep(5000);
+            #endif
+            _update_status(rank_id, _STATUS_AVAILABLE);
         } else {
             std::cout << "Warning: Token is invalid, you need to reserve the rank first, nothing launched" << std::endl;
         }
     }
 
-    void launch_rank_async(int rank_id, int token) {
+    void launch_rank_async(size_t rank_id, int token) {
         if (_is_token_valid(rank_id, token)) {
-            #ifndef IGNORE_DPU_LIB
+            #ifndef IGNORE_DPU_CALLS
+            _update_status(rank_id, _STATUS_RUNNING);
             DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_ASYNCHRONOUS));
-            dpu_callback(_sets[rank_id], PimRankSet::_rank_done_callback, new std::pair<PimRankSet*, int>(this, rank_id), DPU_CALLBACK_ASYNC);
-            _update_idle_status(rank_id, false);
-            if (_do_trace_debug) {
-                _update_trace_debug_status(rank_id, TraceDebugStatus::WATCH);
-            }
+            auto callback_data = new PimCallbackData(rank_id, this, [](size_t rank_id, void* arg) {
+                auto rankset = static_cast<PimRankSet*>(arg);
+                rankset->_rank_finished_callback(rank_id);
+            });
+            add_callback_async(callback_data);
             #else
-            _update_idle_status(rank_id, false);
-            usleep(500);
-            _rank_done_callback(_sets[rank_id], 0, new std::pair<PimRankSet*, int>(this, rank_id));
+            _update_status(rank_id, _STATUS_RUNNING);
+            usleep(5000);
+            _rank_finished_callback(rank_id);
             #endif
         } else {
             std::cout << "Warning: Token is invalid, you need to reserve the rank first, nothing launched" << std::endl;
         }
 	}
 
-    int wait_reserve_rank(int rank_id) {
+    void add_callback_async(PimCallbackData* callback_data) {
+        DPU_ASSERT(dpu_callback(_sets[callback_data->get_rank_id()], PimRankSet::_generic_callback, callback_data, DPU_CALLBACK_ASYNC));
+    }
+
+    int wait_reserve_rank(size_t rank_id) {
         int token;
-        while ((token = try_reserve_rank(rank_id)) == CANNOT_RESERVE) { usleep(100); }
+        while ((token = try_reserve_rank(rank_id)) == RESERVATION_FAILED) {
+            usleep(100);
+            std::cout << "test" << std::endl;
+        }
         return token;
     }
 
-    void wait_rank_done(int rank_id) {
-        while (!_get_idle_status(rank_id)) { usleep(100); }
+    void wait_rank_done(size_t rank_id) {
+        while (_get_status(rank_id) == _STATUS_RUNNING) {
+            usleep(100);
+        }
     }
 
-    int try_reserve_rank(int rank_id) {
-        int token = CANNOT_RESERVE;
-        _reservation_mutex.lock();
-        bool is_reserved = (_get_idle_status(rank_id) && (_reservations[rank_id] == _AVAILABLE_FOR_RESERVATION));
+    int try_reserve_rank(size_t rank_id) {
+        int token = RESERVATION_FAILED;
+        _status_mutex.lock();
+        bool is_reserved = (_statuses[rank_id] == _STATUS_AVAILABLE);
         if (is_reserved) {
+            // std::cout << "reserved " << rank_id << std::endl;
             token = rand();
-            _reservations[rank_id] = token;
+            _statuses[rank_id] = token;
+            // usleep(10000);
         }
-        _reservation_mutex.unlock();
+        _status_mutex.unlock();
         return token;
     }
 
     template<typename T>
-    T get_reduced_sum_from_rank(int rank_id, const char* symbol_name, uint32_t symbol_offset, size_t length) {
+    T get_reduced_sum_from_rank(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, size_t length) {
         T result = 0;
-        #ifndef IGNORE_DPU_LIB
+        #ifndef IGNORE_DPU_CALLS
         T results[_nb_dpu_in_rank[rank_id]];
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, &results[_it_dpu_idx]));
         }
 		DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_FROM_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));
-		for (int d = 0; d < _nb_dpu_in_rank[rank_id]; d++) {
+		for (size_t d = 0; d < _nb_dpu_in_rank[rank_id]; d++) {
 			result += results[d];
         }
         #endif
@@ -201,19 +222,18 @@ public:
     #define DPU_UID(rank_id,dpu_id) ((rank_id) * 100 + (dpu_id))
 
     template<typename T>
-    void send_data_to_rank(int rank_id, const char* symbol_name, uint32_t symbol_offset, const std::vector<std::vector<T>*>& buffers, size_t length) {
-        #ifndef IGNORE_DPU_LIB
+    void send_data_to_rank_async(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, const std::vector<std::vector<T>*>& buffers, size_t length) {
+        #ifndef IGNORE_DPU_CALLS
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, buffers[_it_dpu_idx]->data()));
-            // std::cout << "[=>" << DPU_UID(rank_id, _it_dpu_idx) << ": item cnt sent = " << buffers[_it_dpu_idx]->data()[0] << " " << buffers[_it_dpu_idx]->data()[1] << std::endl;
         }
-        DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_TO_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));
+        DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_TO_DPU, symbol_name, symbol_offset, length, DPU_XFER_ASYNC));
         #endif
     }
 
     template<typename T>
-    void send_data_to_rank(int rank_id, const char* symbol_name, uint32_t symbol_offset, T* buffer, size_t length) {
-        #ifndef IGNORE_DPU_LIB
+    void send_data_to_rank_sync(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, T* buffer, size_t length) {
+        #ifndef IGNORE_DPU_CALLS
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, &buffer[_it_dpu_idx]));
         }
@@ -224,46 +244,57 @@ public:
 private:
     
     std::vector<dpu_set_t> _sets;
-    int _nb_ranks;
+    size_t _nb_ranks;
+    size_t _nb_threads;
 
-	int _nb_dpu;
-	std::vector<int> _nb_dpu_in_rank;
-	std::vector<int> _cum_dpu_idx_for_rank;
+	size_t _nb_dpu;
+	std::vector<size_t> _nb_dpu_in_rank;
+	std::vector<size_t> _cum_dpu_idx_for_rank;
 
-    std::mutex _idle_mutex;
-    std::vector<bool> _is_rank_idle;
-
-    void _update_idle_status(int rank_id, bool value) {
-        _idle_mutex.lock();
-        _is_rank_idle[rank_id] = value;
-        _idle_mutex.unlock();
+    // Status management
+    std::mutex _status_mutex;
+    std::vector<int> _statuses;
+    const int _STATUS_AVAILABLE = -2;
+    const int _STATUS_RUNNING = -3;
+    
+    void _update_status(size_t rank_id, int value) {
+        _status_mutex.lock();
+        _statuses[rank_id] = value;
+        _status_mutex.unlock();
     }
 
-    bool _get_idle_status(int rank_id) {
-        bool result;
-         _idle_mutex.lock();
-        result = _is_rank_idle[rank_id];
-        _idle_mutex.unlock();
+    int _get_status(size_t rank_id) {
+        int result;
+        _status_mutex.lock();
+        result = _statuses[rank_id];
+        _status_mutex.unlock();
         return result;
     }
 
-    static dpu_error_t _rank_done_callback(struct dpu_set_t set, uint32_t _id, void* arg) {
-		std::pair<PimRankSet*, int>* info = (std::pair<PimRankSet*, int>*) arg;
-        // std::cout << "Reading logs of rank " << info->second << std::endl;
-        info->first->_try_print_dpu_logs(info->second);
-		// std::cout << "Rank " << info->second << " is done" << std::endl;
-		info->first->_update_idle_status(info->second, true);
-		info->first->_update_reservation(info->second, info->first->_AVAILABLE_FOR_RESERVATION);
-		delete info;
-		return DPU_OK;
+    bool _is_token_valid(size_t rank_id, int token) {
+        return (token >= 0) && (_get_status(rank_id) == token);
+    }
+
+    // Callbacks
+    static dpu_error_t _generic_callback(struct dpu_set_t set, uint32_t _id, void* arg) {
+        auto callback_data = static_cast<PimCallbackData*>(arg);
+        callback_data->run();
+        delete callback_data;
+        return DPU_OK;
+    }
+
+    void _rank_finished_callback(size_t rank_id) {
+        spdlog::info("DPU callback: rank {} has finished", rank_id);
+        _try_print_dpu_logs(rank_id);
+		_update_status(rank_id, _STATUS_AVAILABLE);
+        _trace_rank_done();
 	}
 
-    int _nb_threads;
-
+    // Logging
     bool _print_dpu_logs;
 
-    void _try_print_dpu_logs(int rank_id) {
-        #ifndef IGNORE_DPU_LIB
+    void _try_print_dpu_logs(size_t rank_id) {
+        #ifndef IGNORE_DPU_CALLS
         if (_print_dpu_logs) {
             DPU_FOREACH(_sets[rank_id], _it_dpu) {
                 DPU_ASSERT(dpu_log_read(_it_dpu, stdout));
@@ -275,54 +306,5 @@ private:
     // For iterations
 	struct dpu_set_t _it_dpu;
 	uint32_t _it_dpu_idx;
-
-    // Trace debug info
-    bool _do_trace_debug;
-    std::vector<int> _trace_debug_status;
-	std::vector<std::mutex*> _trace_debug_mutex;
-    enum TraceDebugStatus{NONE, WATCH, DONE};
-
-    void _watch_trace_debug(int rank_id) {
-        #ifndef IGNORE_DPU_LIB
-		while (_trace_debug_status[rank_id] != TraceDebugStatus::DONE) {
-			if (_trace_debug_status[rank_id] == TraceDebugStatus::WATCH) {
-				_update_trace_debug_status(rank_id, TraceDebugStatus::NONE);
-				DPU_ASSERT(dpu_sync(_sets[rank_id]));
-			}
-			usleep(100);
-		}
-        delete _trace_debug_mutex[rank_id];
-        #endif
-	}
-
-    void _update_trace_debug_status(int rank_id, TraceDebugStatus value) {
-        _trace_debug_mutex[rank_id]->lock();
-        if (_trace_debug_status[rank_id] != TraceDebugStatus::DONE) {
-            _trace_debug_status[rank_id] = value;
-        }
-        _trace_debug_mutex[rank_id]->unlock();
-    }
-
-    std::mutex _reservation_mutex;
-    std::vector<int> _reservations;
-    const int _AVAILABLE_FOR_RESERVATION = -2;
-    
-    void _update_reservation(int rank_id, int value) {
-        _reservation_mutex.lock();
-        _reservations[rank_id] = value;
-        _reservation_mutex.unlock();
-    }
-
-    int _get_reservation_status(int rank_id) {
-        int result;
-        _reservation_mutex.lock();
-        result = _reservations[rank_id];
-        _reservation_mutex.unlock();
-        return result;
-    }
-
-    bool _is_token_valid(int rank_id, int token) {
-        return (token >= 0) &&  (_get_reservation_status(rank_id) == token);
-    }
 
 };

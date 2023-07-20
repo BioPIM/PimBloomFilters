@@ -1,4 +1,4 @@
-set(TARGETS bloom_filters_dpu1 bloom_filters_dpu2)
+set(TARGETS bloom_filters_dpu)
 
 set(TASKLETS "16")
 set(STACK_SIZE "3072")

@@ -137,16 +137,16 @@ int main() {
 
 			int t_items_cnt = 0;
 			uint64_t nb_items = 0;
-
 			
 			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
 			nb_items = items_cache[0];
+			
 			dpu_printf_0("[=>%lu: We have %lu items\n", _dpu_uid, items[0]);
 			// dpu_printf_0("We have %lu items\n", nb_items);
-			// if (nb_items > 8192 || nb_items == 0) {
-			// 	dpu_printf_0("[=>%lu: ERROR We have %lu items | next is %lu\n", _dpu_uid, nb_items, items[1]);
-			// 	break;
-			// }
+			if (nb_items > MAX_NB_ITEMS_PER_DPU) {
+				halt(); // This should not happen, transfer issue
+			}
+			
 			int cache_idx = 1;
 			for (int i = 0; i < nb_items; i++) {
 				if (cache_idx == ITEMS_CACHE_SIZE) {

@@ -45,7 +45,7 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	CAPTURE(bloom_size2);
 	CAPTURE(nb_hash);
 
-	bloom_filter = new PimBloomFilter(nb_ranks, bloom_size2, nb_hash, PimBloomFilter::BASIC_CACHE_ITEMS, dpu_profile);
+	bloom_filter = new PimBloomFilter(nb_ranks, bloom_size2, nb_hash, dpu_profile);
 
 	INFO("Checking weight after initialization...");
 	uint32_t weight = bloom_filter->get_weight();

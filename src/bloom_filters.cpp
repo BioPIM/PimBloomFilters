@@ -125,18 +125,17 @@ public:
 
 		const size_t nb_items = items.size();
 		const size_t nb_ranks = _pim_rankset.get_nb_ranks();
-		const size_t nb_workers = 4;
+		const size_t nb_workers = 8;
 
 		const uint64_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU / nb_ranks;
-		const size_t bucket_size = MAX_NB_ITEMS_PER_DPU + 1;//CEIL8(max_nb_items_per_bucket + 1);
+		const size_t bucket_size = max_nb_items_per_bucket + 1;
 		const size_t bucket_length = sizeof(uint64_t) * bucket_size;
 
 		auto statistics = LaunchStatistics();
 
 		auto done_data = std::vector<std::vector<std::vector<uint64_t>>>();
-		// Maybe reserve
+		done_data.reserve(nb_items / max_nb_items_per_bucket);
 		std::mutex done_data_mutex;
-		std::mutex debug; // TODO remove me
 
 		#pragma omp parallel num_threads(nb_workers)
 		{
@@ -152,10 +151,6 @@ public:
 				uint32_t bucket_idx = dispatch_data.second;
 				size_t nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
 
-				
-
-				// ERROR IS HERE
-				// debug.lock();
 				auto &buckets = rank_buckets[rank_id];
 				
 				if (buckets.empty()) {
@@ -165,70 +160,42 @@ public:
 					}
 					
 				}
-				// debug.unlock();
-				////
-				
-
-				
 				
 				std::vector<uint64_t> &bucket = buckets[bucket_idx];
 				bucket[0]++;
 				bucket[bucket[0]] = item;
 
-				
 				if (bucket[0] >= max_nb_items_per_bucket) {
 					done_data_mutex.lock();
-					size_t done_data_idx = done_data.size();
 					done_data.push_back(std::move(buckets));
-
-					auto check_pair = new std::pair<std::vector<std::vector<std::vector<uint64_t>>>*, size_t>(&done_data, done_data_idx);
-					auto check_nb_callback_data = new PimCallbackData(rank_id, check_pair, [](size_t rank_id, void* arg) {
-						std::string sizes = std::string();
-						auto pair = static_cast<std::pair<std::vector<std::vector<std::vector<uint64_t>>>*, size_t>*>(arg);
-						auto done_data = pair->first;
-						auto idx = pair->second;
-						uint64_t nb_items = 0;
-						auto buckets = (*done_data)[idx];
-						for (auto bucket : buckets) {
-							nb_items += bucket[0];
-							sizes += std::to_string(bucket[0]) + std::string(" ");
-						}
-						spdlog::debug("Rank {}: reading {} items to send [ {} ]", rank_id, nb_items, sizes);
-						delete pair;
-					});
-
-					_insert_launch(rank_id, done_data.back(), bucket_length, statistics, check_nb_callback_data);
-
+					_insert_launch(rank_id, done_data.back(), bucket_length, statistics);
 					done_data_mutex.unlock();
 					rank_buckets[rank_id] = std::vector<std::vector<uint64_t>>();
 				}
 				
-				
-
 			}
 			
-			
 			// Launch remaining buckets that are not full
-			debug.lock();
 			for (size_t rank_id = 0; rank_id < nb_ranks; rank_id++) {
 				auto &buckets = rank_buckets[rank_id];
 				if (!buckets.empty()) {
 					done_data_mutex.lock();
 					done_data.push_back(std::move(buckets));
-					_insert_launch(rank_id, done_data.back(), bucket_length, statistics, NULL);
+					_insert_launch(rank_id, done_data.back(), bucket_length, statistics);
 					done_data_mutex.unlock();
 				}
 			}
-			debug.unlock();
 
 			// Call to see on trace when workers are done
 			_worker_done();
-
 			
 		}
 		
 		_pim_rankset.wait_all_ranks_done();
-		statistics.print();
+
+		if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {
+			statistics.print();
+		}
 
 	}
 
@@ -344,7 +311,7 @@ private:
 			}
 
 			void print() {
-				spdlog::info("Launched {} rounds and handled {} items", _rounds_lauched, _items_handled);
+				spdlog::debug("Launched {} rounds and handled {} items", _rounds_lauched, _items_handled);
 			}
 
 		private:
@@ -381,44 +348,42 @@ private:
 		return std::pair<uint32_t, uint32_t>(rank_id, dpu_id);
 	}
 
-	void _insert_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t &bucket_length, LaunchStatistics& statistics, PimCallbackData* more_callback) {
-
-		uint64_t items_sent = 0;
-		for (auto &bucket : buckets) {
-			items_sent += bucket[0];
-		}
+	void _insert_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t &bucket_length, LaunchStatistics& statistics) {
 
 		_pim_rankset.lock_rank(rank_id); // Lock so that other workers don't stack async calls in-between
-		
+
 		_pim_rankset.send_data_to_rank_async<uint64_t>(rank_id, "items", 0, buckets, bucket_length);
 		broadcast_mode_async(rank_id, BloomMode::BLOOM_INSERT);
 
-		// Error check
-		if (more_callback != NULL) {
-			_pim_rankset.add_callback_async(more_callback);
-		}
+		// Error checking for number of items
+		// auto check_pair = new std::pair<PimRankSet*, uint64_t>(&_pim_rankset, items_sent);
+		// auto check_callback_data = new PimCallbackData(rank_id, check_pair, [](size_t rank_id, void* arg) {
+		// 	auto check_pair = static_cast<std::pair<PimRankSet*, uint64_t>*>(arg);
+		// 	uint64_t items_received = check_pair->first->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
+		// 	uint64_t items_sent = check_pair->second;
+		// 	if (items_sent != items_received) {
+		// 		spdlog::error("Rank {}: DPUs received {} items instead of {} (diff = {})", rank_id, items_received, items_sent, (items_received - items_sent));
+		// 	} else {
+		// 		spdlog::debug("Rank {}: DPUs received the right amount of items ({})", rank_id, items_received);
+		// 	}
+		// 	delete check_pair;
+		// });
+		// _pim_rankset.add_callback_async(check_callback_data);
+		// ----------------- //
 
-		auto check_pair = new std::pair<PimRankSet*, uint64_t>(&_pim_rankset, items_sent);
-		auto check_callback_data = new PimCallbackData(rank_id, check_pair, [](size_t rank_id, void* arg) {
-			auto check_pair = static_cast<std::pair<PimRankSet*, uint64_t>*>(arg);
-			uint64_t items_received = check_pair->first->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
-			uint64_t items_sent = check_pair->second;
-			if (items_sent != items_received) {
-				spdlog::error("Rank {}: DPUs received {} items instead of {} (diff = {})", rank_id, items_received, items_sent, (items_received - items_sent));
-			} else {
-				spdlog::debug("Rank {}: DPUs received the right amount of items ({})", rank_id, items_received);
-			}
-			delete check_pair;
-		});
-		_pim_rankset.add_callback_async(check_callback_data);
-		//
-
-		// Launch
 		_pim_rankset.launch_rank_async(rank_id);
 
 		_pim_rankset.unlock_rank(rank_id);
+
 		spdlog::info("Planned to launch rank {}", rank_id);
-		statistics.incr_rounds(items_sent);
+
+		if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {
+			uint64_t items_sent = 0;
+			for (auto &bucket : buckets) {
+				items_sent += bucket[0];
+			}
+			statistics.incr_rounds(items_sent);
+		}
 
 	}
 

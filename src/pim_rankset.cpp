@@ -191,28 +191,22 @@ public:
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, &results[_it_dpu_idx]));
         }
 		DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_FROM_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));
-        std::string sizes = std::string();
 		for (size_t d = 0; d < _nb_dpu_in_rank[rank_id]; d++) {
 			result += results[d];
-            sizes += std::to_string(results[d]) + std::string(" ");
         }
-        spdlog::debug("Rank {}: reduced result = {} [ {} ]", rank_id, result, sizes);
         #endif
         return result;
     }
 
     template<typename T>
     void send_data_to_rank_async(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, std::vector<std::vector<T>>& buffers, size_t length) {
-        uint64_t items_sent = 0;
         #ifndef IGNORE_DPU_CALLS
         struct dpu_set_t _it_dpu;
 	    uint32_t _it_dpu_idx;
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, buffers[_it_dpu_idx].data()));
-            items_sent += buffers[_it_dpu_idx][0];
         }
         DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_TO_DPU, symbol_name, symbol_offset, length, DPU_XFER_ASYNC));
-        spdlog::debug("Rank {}: Sending {} items", rank_id, items_sent);
         #endif
     }
 

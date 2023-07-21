@@ -67,8 +67,9 @@ public:
     PimBloomFilter(	const int nb_ranks,
 					const int size2,
 					const uint32_t nb_hash = 4,
-					const char* dpu_profile = DpuProfile::HARDWARE) : _size2(size2), _nb_hash(nb_hash), _hash_functions(nb_hash),
-						_pim_rankset(PimRankSet(nb_ranks, NB_THREADS, dpu_profile, get_dpu_binary_name().c_str())) {
+					const char* dpu_profile = DpuProfile::HARDWARE) :
+						_pim_rankset(PimRankSet(nb_ranks, NB_THREADS, dpu_profile, get_dpu_binary_name().c_str())),
+						_size2(size2), _nb_hash(nb_hash), _hash_functions(nb_hash) {
 		
 		if (size2 < 4) {
 			throw std::invalid_argument(std::string("Error: bloom size2 must be >= 4"));
@@ -102,431 +103,109 @@ public:
 		}
 
 		_pim_rankset.for_each_rank([this](size_t rank_id) {
-			int token = _pim_rankset.wait_reserve_rank(rank_id);
 			_pim_rankset.broadcast_to_rank_sync(rank_id, "_dpu_size2", 0, &_dpu_size2, sizeof(_dpu_size2));
 			_pim_rankset.broadcast_to_rank_sync(rank_id, "_nb_hash", 0, &_nb_hash, sizeof(_nb_hash));
 			broadcast_mode_sync(rank_id, BloomMode::BLOOM_INIT);
 
 			int nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
-			uint64_t uids[nb_dpus_in_rank];
+			auto uids = std::vector<uint64_t>(nb_dpus_in_rank, 0);
 			for (int i = 0; i < nb_dpus_in_rank; i++) {
 				uids[i] = DPU_UID(rank_id, i);
 			}
 			_pim_rankset.send_data_to_rank_sync(rank_id, "_dpu_uid", 0, uids, sizeof(uint64_t));
 
-			_pim_rankset.launch_rank_sync(rank_id, token);
+			_pim_rankset.launch_rank_sync(rank_id);
 		}, true);
 
 	}
 
-	~PimBloomFilter() {}
+	~PimBloomFilter() = default;
 
-	void insert(std::vector<uint64_t>& items) {
+	void insert(const std::vector<uint64_t>& items) {
 
-		// uint64_t* buffer = (uint64_t*) malloc(sizeof(uint64_t) * (MAX_NB_ITEMS_PER_DPU + 1));
-		// uint32_t* buffer2 = (uint32_t*) malloc(sizeof(uint32_t) * (MAX_NB_ITEMS_PER_DPU + 1));
-		// buffer[0] = 0;
-		
-		// size_t buffer_index = 0;
-		// for (int i = 0; i < items.size(); i++) {
-		// 	uint64_t item = items[i];
-		// 	buffer[0]++;
- 		// 	buffer[buffer[0]] = item;
+		const size_t nb_items = items.size();
+		const size_t nb_ranks = _pim_rankset.get_nb_ranks();
+		const size_t nb_workers = 4;
 
-		// 	uint64_t h0 = this->_hash_functions(item, 0);
-		// 	uint32_t rank = fastrange32(h0, _nb_ranks);
-		// 	int nb_dpus_in_rank = _nb_dpu_per_rank[rank + 1] - _nb_dpu_per_rank[rank];
-		// 	uint32_t dpu_idx = _nb_dpu_per_rank[rank] + fastrange32(h0, nb_dpus_in_rank);
-		// 	buffer2[buffer[0]] = dpu_idx;
+		const uint64_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU / nb_ranks;
+		const size_t bucket_size = MAX_NB_ITEMS_PER_DPU + 1;//CEIL8(max_nb_items_per_bucket + 1);
+		const size_t bucket_length = sizeof(uint64_t) * bucket_size;
 
-		// 	if ((buffer[0] == MAX_NB_ITEMS_PER_DPU) || (i == (items.size() - 1))) {
-		// 		#pragma omp parallel for num_threads(NB_THREADS)
-		// 		for (int rank = 0; rank < _nb_ranks; rank++) {
-		// 			for (int d = _nb_dpu_per_rank[rank]; d < _nb_dpu_per_rank[rank + 1]; d++) {
-		// 				prepare_dpu_launch_async(rank);
-		// 				DPU_ASSERT(dpu_broadcast_to(_sets[rank], "items", 0, buffer, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1 + 7), DPU_XFER_DEFAULT));
-		// 				DPU_ASSERT(dpu_broadcast_to(_sets[rank], "items_keys", 0, buffer2, sizeof(uint32_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1 + 7), DPU_XFER_DEFAULT));
-		// 				// DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
-		// 				// 	DPU_ASSERT(dpu_prepare_xfer(_dpu, buffer));
-		// 				// }
-		// 				// DPU_ASSERT(dpu_push_xfer(_sets[rank], DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 1 + 7), DPU_XFER_DEFAULT));
-		// 				launch_rank_async(rank, BloomMode::BLOOM_INSERT);
-		// 				break;
-		// 			}
-		// 		}
-		// 		buffer[0] = 0;
-		// 	}
+		auto statistics = LaunchStatistics();
 
-		// }
+		auto done_data = std::vector<std::vector<std::vector<uint64_t>>>();
+		// Maybe reserve
+		std::mutex done_data_mutex;
+		std::mutex debug; // TODO remove me
 
+		#pragma omp parallel num_threads(nb_workers)
+		{
 
+			int worker_id = omp_get_thread_num();
+			auto rank_buckets = std::vector<std::vector<std::vector<uint64_t>>>(nb_ranks);
+			
+			// Consider a partition of the items
+			for (size_t i = worker_id; i < nb_items; i += nb_workers) {
+				uint64_t item = items[i];
+				auto dispatch_data = _get_rank_dpu_id_from_item(item);
+				uint32_t rank_id = dispatch_data.first;
+				uint32_t bucket_idx = dispatch_data.second;
+				size_t nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
 
-		
-		// int item_idx = 0;
-		// bool done = false;
-		// uint64_t* data = items.data();
-		// while (!done) {
-		// 	for (int rank = 0; rank < _nb_ranks; rank++) {
-		// 		if (item_idx >= items.size()) {
-		// 			done = true;
-		// 			break;
-		// 		} else {
-		// 			prepare_dpu_launch_async(rank);
-		// 			DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
-		// 				if (item_idx < items.size()) {
-		// 					DPU_ASSERT(dpu_prepare_xfer(_dpu, &data[item_idx]));
-		// 					// item_idx += MAX_NB_ITEMS_PER_DPU;
-		// 				}
-		// 			}
-		// 			DPU_ASSERT(dpu_push_xfer(_sets[rank], DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU), DPU_XFER_DEFAULT));
-		// 			launch_rank_async(rank, BloomMode::BLOOM_INSERT);
-		// 		}
-		// 	}
-		// 	item_idx += MAX_NB_ITEMS_PER_DPU;
-		// }
-		// #pragma omp parallel for num_threads(NB_THREADS)
-		// for (int rank = 0; rank < _nb_ranks; rank++) {
-		// 	prepare_dpu_launch_async(rank);
-		// }
+				auto &buckets = rank_buckets[rank_id];
 
-		// std::vector<std::vector<uint64_t*>> t_buckets;
-		// t_buckets.reserve(2);
-		// for (int t = 0; t < 2; t++) {
-		// 	std::vector<uint64_t*> buckets;
-		// 	buckets.reserve(_nb_dpu);
-		// 	for (int d = 0; d < _nb_dpu; d++) {
-		// 		buckets.push_back((uint64_t*) malloc(sizeof(uint64_t) * (MAX_NB_ITEMS_PER_DPU + 1)));
-		// 		buckets[d][0] = 0;
-		// 	}
-		// 	t_buckets.push_back(buckets);
-		// }
-
-		// // std::vector<std::mutex*> mutexes;
-		// // for (int r = 0; r < _nb_ranks; r++) {
-		// // 	mutexes.push_back(new std::mutex());
-		// // }
-
-		// uint64_t bucket_size = _size / _nb_dpu;
-
-		// #pragma omp parallel for num_threads(2)
-		// for (int t = 0; t < 2; t++) {
-		// 	std::vector<uint64_t*> buckets = t_buckets[t];
-		// 	for (int i = t; i < items.size(); i += 2) {
-		// 		uint64_t item = items[i];
-		// 		uint64_t h0 = this->_hash_functions(item, 0);
-				
-		// 		uint32_t rank = fastrange32(h0, _nb_ranks);
-		// 		int nb_dpus_in_rank = _nb_dpu_per_rank[rank + 1] - _nb_dpu_per_rank[rank];
-		// 		uint32_t bucket_idx = _nb_dpu_per_rank[rank] + fastrange32(h0, nb_dpus_in_rank);
-				
-		// 		// mutexes[rank]->lock();
-		// 		uint64_t* bucket = buckets[bucket_idx];
-
-		// 		if (bucket[0] == MAX_NB_ITEMS_PER_DPU) {
-
-		// 			if (t == 1) { return; }
-
-		// 			// Launch
-		// 			prepare_dpu_launch_async(rank);
-		// 			DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
-		// 				DPU_ASSERT(dpu_prepare_xfer(_dpu, buckets[_nb_dpu_per_rank[rank] + _dpu_idx]));
-		// 			}
-		// 			DPU_ASSERT(dpu_push_xfer(_sets[rank], DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 8), DPU_XFER_DEFAULT));
-		// 			launch_rank_async(rank, BloomMode::BLOOM_INSERT);
-
-		// 			std::thread t1(&PimBloomFilter::sync_rank, this, rank);
-		// 			t1.detach();
-
-		// 			// Reset buckets
-		// 			for (int d = _nb_dpu_per_rank[rank]; d < _nb_dpu_per_rank[rank + 1]; d++) {
-		// 				buckets[d][0] = 0;
-		// 			}
-
-		// 		}
-		// 		bucket[0]++;
-		// 		bucket[bucket[0]] = item;
-		// 		// mutexes[rank]->unlock();
-		// 	}
-		// }
-
-		// // Launch a last round for the ranks that need it
-		// for (int t = 0; t < 2; t++) {
-		// 	std::vector<uint64_t*> buckets = t_buckets[t];
-		// 	#pragma omp parallel for num_threads(NB_THREADS)
-		// 	for (int rank = 0; rank < _nb_ranks; rank++) {
-		// 		prepare_dpu_launch_async(rank);
-		// 		for (int d = _nb_dpu_per_rank[rank]; d < _nb_dpu_per_rank[rank + 1]; d++) {
-		// 			uint64_t* bucket = buckets[d];
-		// 			if (bucket[0]) {
-		// 				DPU_FOREACH(_sets[rank], _dpu, _dpu_idx) {
-		// 					DPU_ASSERT(dpu_prepare_xfer(_dpu, buckets[_nb_dpu_per_rank[rank] + _dpu_idx]));
-		// 				}
-		// 				DPU_ASSERT(dpu_push_xfer(_sets[rank], DPU_XFER_TO_DPU, "items", 0, sizeof(uint64_t) * CEIL8(MAX_NB_ITEMS_PER_DPU + 8), DPU_XFER_DEFAULT));
-		// 				launch_rank(rank, BloomMode::BLOOM_INSERT);
-		// 				break;
-		// 			}
-		// 		}
-		// 	}
-		// }
-
-		// for (int r = 0; r < _nb_ranks; r++) {
-		// 	delete mutexes[r];
-		// }
-
-		int done = 0;
-		int* done_addr = &done; // Using address because weird behavior with nested omp otherwise, change is not seen in launchers
-		std::mutex done_mutex;
-
-		std::queue<std::pair<size_t, std::vector<std::vector<uint64_t>*>*>> work_queue;
-		std::mutex work_queue_mutex;
-
-		size_t nb_items = items.size();
-		size_t nb_ranks = _pim_rankset.get_nb_ranks();
-		size_t nb_workers = 5;
-		size_t nb_dpu = _pim_rankset.get_nb_dpu();
-
-		uint64_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU / nb_ranks;
-		size_t bucket_size = CEIL8(max_nb_items_per_bucket + 1);
-		size_t bucket_length = sizeof(uint64_t) * bucket_size;
-
-		// std::vector<std::mutex> bucket_mutexes(nb_dpu);
-		// std::vector<std::mutex> rank_mutexes(nb_ranks);
-
-		omp_set_nested(1);
-		#pragma omp parallel sections
-		{			
-
-			// Workers: fill buckets
-			#pragma omp section
-			{
-				// std::vector<std::vector<uint64_t*>*> rank_buckets = std::vector<std::vector<uint64_t*>*>(nb_ranks, NULL);
-
-				#pragma omp parallel num_threads(nb_workers)
-				{
-					// int tid = omp_get_thread_num();
-					
-					// for (int i = tid; i < nb_items; i += nb_workers) {
-
-					// 	uint64_t item = items[i];
-					// 	auto dispatch_data = _get_rank_dpu_id_from_item(item);
-					// 	uint32_t rank_id = dispatch_data.first;
-
-					// 	uint32_t bucket_idx = dispatch_data.second;
-					// 	int nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
-
-					// 	// int start_idx = _pim_rankset.get_cum_dpu_idx_for_rank(rank_id);
-						
-					// 	rank_mutexes[rank_id].lock();
-					// 	std::vector<uint64_t*>* buckets = rank_buckets[rank_id];
-
-					// 	if (buckets == NULL) {
-					// 		buckets = new std::vector<uint64_t*>(nb_dpus_in_rank, NULL);
-					// 		// std::cout << "Creating new for rank " << rank_id << " bucket " << buckets << std::endl;
-					// 		for (int d = 0; d < nb_dpus_in_rank; d++) {
-					// 			(*buckets)[d] = (uint64_t*) malloc(sizeof(uint64_t) * (MAX_NB_ITEMS_PER_DPU + 1));
-					// 			// std::cout << "Malloc " << (*buckets)[d] << std::endl;
-					// 			(*buckets)[d][0] = 0;
-					// 		}
-					// 		rank_buckets[rank_id] = buckets;
-					// 	}
-
-					// 	uint64_t* bucket = (*buckets)[bucket_idx];
-					// 	// bucket_mutexes[start_idx + bucket_idx].lock();
-					// 	bucket[0]++;
-					// 	bucket[bucket[0]] = item;
-
-					// 	if (bucket[0] == MAX_NB_ITEMS_PER_DPU) {
-							
-					// 		// if (true) { // Take the rank. If fails, then someone else is already intending to launch so ignore
-					// 		// if (rank_mutexes[rank_id].try_lock()) { // Take the rank. If fails, then someone else is already intending to launch so ignore
-								
-					// 			// Lock all buckets in rank
-					// 			// for (int d = 0; d < nb_dpus_in_rank; d++) {
-					// 			// 	if (d != bucket_idx) { // Undefined behavior if locking while already owning so need to avoid that
-					// 			// 		bucket_mutexes[start_idx + d].lock();
-					// 			// 	}
-					// 			// }
-
-					// 			// All rank is locked now, we can launch safely
-					// 			// std::cout << "Queuing rank " << rank_id << " bucket " << buckets << std::endl;
-					// 			work_queue_mutex.lock();
-					// 			work_queue.push(std::pair<int, std::vector<uint64_t*>*>(rank_id, buckets));
-					// 			work_queue_mutex.unlock();
-					// 			rank_buckets[rank_id] = NULL;
-
-					// 			// Unlock all
-								
-					// 			// for (int d = 0; d < nb_dpus_in_rank; d++) {
-					// 			// 	bucket_mutexes[start_idx + d].unlock();
-					// 			// }
-					// 			// rank_mutexes[rank_id].unlock();
-
-					// 		// } else {
-					// 		// 	bucket_mutexes[start_idx + bucket_idx].unlock();
-					// 		// }
-							
-
-					// 	} else {
-					// 		// bucket_mutexes[start_idx + bucket_idx].unlock();
-					// 	}
-
-					// 	rank_mutexes[rank_id].unlock();
-
-					// }
-
-					// #pragma omp barrier
-
-					// // Add all remaining to queue
-					// for (int rank_id = tid; rank_id < nb_ranks; rank_id += nb_workers) {
-					// 	std::vector<uint64_t*>* buckets = rank_buckets[rank_id];
-					// 	if (buckets != NULL) {
-					// 		work_queue_mutex.lock();
-					// 		work_queue.push(std::pair<int, std::vector<uint64_t*>*>(rank_id, buckets));
-					// 		work_queue_mutex.unlock();
-					// 	}
-					// }
-
-					// ---------
-					
-					int tid = omp_get_thread_num();
-					std::vector<std::vector<std::vector<uint64_t>*>*> rank_buckets = std::vector<std::vector<std::vector<uint64_t>*>*>(nb_ranks, NULL);
-					
-					for (size_t i = tid; i < nb_items; i += nb_workers) {
-						uint64_t item = items[i];
-						auto dispatch_data = _get_rank_dpu_id_from_item(item);
-						uint32_t rank_id = dispatch_data.first;
-						uint32_t bucket_idx = dispatch_data.second;
-						size_t nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
-
-						std::vector<std::vector<uint64_t>*>* buckets = rank_buckets[rank_id];
-
-						if (buckets == NULL) {
-							buckets = new std::vector<std::vector<uint64_t>*>(nb_dpus_in_rank, NULL);
-							for (int d = 0; d < nb_dpus_in_rank; d++) {
-								(*buckets)[d] = new std::vector<uint64_t>(bucket_size, 0UL);
-							}
-							rank_buckets[rank_id] = buckets;
-						}
-						
-						std::vector<uint64_t>* bucket = (*buckets)[bucket_idx];
-						(*bucket)[0]++;
-						(*bucket)[(*bucket)[0]] = item;
-
-						if ((*bucket)[0] >= max_nb_items_per_bucket) {
-							// std::cout << "Queuing rank " << rank_id << " bucket " << buckets << std::endl;
-							work_queue_mutex.lock();
-							work_queue.push(std::pair<size_t, std::vector<std::vector<uint64_t>*>*>(rank_id, buckets));
-							work_queue_mutex.unlock();
-							rank_buckets[rank_id] = NULL;
-						}
-
-					}
-					// Add all remaining to queue
-					for (size_t rank_id = 0; rank_id < nb_ranks; rank_id++) {
-						std::vector<std::vector<uint64_t>*>* buckets = rank_buckets[rank_id];
-						if (buckets != NULL) {
-							work_queue_mutex.lock();
-							work_queue.push(std::pair<int, std::vector<std::vector<uint64_t>*>*>(rank_id, buckets));
-							work_queue_mutex.unlock();
-						}
-					}
-
-					// ---------
-
-					done_mutex.lock();
-					(*done_addr)++; // Must be done **after** adding all remaining to queue!
-					done_mutex.unlock();
-					_worker_done(); // Call for trace to see when workers are done
-				}
-			}
-
-			// Launcher
-			#pragma omp section
-			{
-				int token;
-				int total_items_sent = 0, rounds_launched = 0;
-				
-				while (true) {
-					work_queue_mutex.lock();
-					size_t queue_size = work_queue.size();
-					if (queue_size == 0) {
-						work_queue_mutex.unlock();
-						// std::cout << tid << " Workers done = " << *done_addr << std::endl;
-						if ((*done_addr) >= nb_workers) {
-							break;
-						}
-					} else {
-						auto info = work_queue.front();
-						size_t rank_id = info.first;
-						if ((token = _pim_rankset.try_reserve_rank(rank_id)) != PimRankSet::RESERVATION_FAILED) {
-
-							work_queue.pop();
-							work_queue_mutex.unlock();
-
-							std::vector<std::vector<uint64_t>*>* buckets = info.second;
-
-							uint64_t items_sent = 0;
-							for (auto bucket : (*buckets)) {
-								items_sent += (*bucket)[0];
-							}
-							total_items_sent += items_sent;
-							
-							_pim_rankset.send_data_to_rank_async<uint64_t>(rank_id, "items", 0, *buckets, bucket_length);
-							broadcast_mode_async(rank_id, BloomMode::BLOOM_INSERT);
-
-							// Error check
-							auto check_pair = new std::pair<PimRankSet*, uint64_t>(&_pim_rankset, items_sent);
-							auto check_callback_data = new PimCallbackData(rank_id, check_pair, [](size_t rank_id, void* arg) {
-								auto check_pair = static_cast<std::pair<PimRankSet*, uint64_t>*>(arg);
-								uint64_t items_received = check_pair->first->get_reduced_sum_from_rank<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
-								uint64_t items_sent = check_pair->second;
-								if (items_sent != items_received) {
-									spdlog::error("Rank {}: DPUs received {} items instead of {} (diff = {})", rank_id, items_received, items_sent, (items_received - items_sent));
-								}
-								delete check_pair;
-							});
-							_pim_rankset.add_callback_async(check_callback_data);
-							//
-
-							// Set a callback to free data
-							auto callback_data = new PimCallbackData(rank_id, buckets, [](size_t rank_id, void* arg) {
-								auto buckets = static_cast<std::vector<std::vector<uint64_t>*>*>(arg);
-								for (auto bucket : (*buckets)) {
-									delete bucket;
-								}
-								delete buckets;
-							});
-							_pim_rankset.add_callback_async(callback_data);
-
-							// Launch
-							_pim_rankset.launch_rank_async(rank_id, token);
-							spdlog::info("Round {}: launched rank {}", rounds_launched, rank_id);
-							rounds_launched++;
-
-						} else {
-							if (queue_size > 1) { // No need to pop front and push back if nothing else in queue
-								work_queue.pop();
-								work_queue.push(info);
-							}
-							work_queue_mutex.unlock();
-						}
+				if (buckets.empty()) {
+					buckets.resize(nb_dpus_in_rank);
+					for (size_t d = 0; d < nb_dpus_in_rank; d++) {
+						buckets[d].resize(bucket_size, 0);
 					}
 				}
-				spdlog::info("Sent {} items and launched {} rounds in total", total_items_sent, rounds_launched);
 				
-				// Wait for DPUs to finish
-				_pim_rankset.for_each_rank([this](size_t rank_id) {
-					_pim_rankset.wait_rank_done(rank_id);
-				}, true);
+				std::vector<uint64_t> &bucket = buckets[bucket_idx];
+				bucket[0]++;
+				bucket[bucket[0]] = item;
+
+				debug.lock();
+				if (bucket[0] >= max_nb_items_per_bucket) {
+					done_data_mutex.lock();
+					done_data.push_back(std::move(buckets));
+					_insert_launch(rank_id, done_data.back(), bucket_length, statistics);
+					done_data_mutex.unlock();
+					rank_buckets[rank_id] = std::vector<std::vector<uint64_t>>();
+				}
+				debug.unlock();
+				
 
 			}
+			
+			
+			// Launch remaining buckets that are not full
+			debug.lock();
+			for (size_t rank_id = 0; rank_id < nb_ranks; rank_id++) {
+				auto &buckets = rank_buckets[rank_id];
+				if (!buckets.empty()) {
+					done_data_mutex.lock();
+					done_data.push_back(std::move(buckets));
+					_insert_launch(rank_id, done_data.back(), bucket_length, statistics);
+					done_data_mutex.unlock();
+				}
+			}
+			debug.unlock();
 
+			// Call to see on trace when workers are done
+			_worker_done();
+
+			
 		}
+		
+		_pim_rankset.wait_all_ranks_done();
+		statistics.print();
+
 	}
 
-
-
 	uint32_t contains(const std::vector<uint64_t>& items) {
+
+		(void) items; // Not implemented yet
 
 		uint32_t total_nb_positive_lookups = 0;
 		// int nb_dpu = _pim_rankset.get_nb_dpu();
@@ -591,16 +270,15 @@ public:
 
 		// Launch in parallel all ranks
 		_pim_rankset.for_each_rank([this](size_t rank_id) {
-			int token = _pim_rankset.wait_reserve_rank(rank_id);
 			broadcast_mode_async(rank_id, BloomMode::BLOOM_WEIGHT);
-			_pim_rankset.launch_rank_async(rank_id, token);
+			_pim_rankset.launch_rank_async(rank_id);
 		}, true);
 
 		// Reduce results in sequential
 		uint32_t weight = 0;
 		_pim_rankset.for_each_rank([this, &weight](size_t rank_id) {
 			_pim_rankset.wait_rank_done(rank_id);
-			weight += _pim_rankset.get_reduced_sum_from_rank<uint32_t>(rank_id, "result", 0, sizeof(uint32_t));
+			weight += _pim_rankset.get_reduced_sum_from_rank_sync<uint32_t>(rank_id, "result", 0, sizeof(uint32_t));
 		}, false);
 
 		return weight;
@@ -615,11 +293,6 @@ public:
 
 	uint32_t contains (const uint64_t& item)  { return contains(std::vector<uint64_t>{item}); }
 
-	// Misc
-	double get_reference_false_positive_probability(const size_t nb_items) {
-		return pow(1.0 - exp(-(double) _nb_hash * (double) nb_items / (double) _size), (double) _nb_hash);
-	}
-
 private:
 
 	PimRankSet _pim_rankset;
@@ -629,6 +302,30 @@ private:
 	int _dpu_size2;
 	int _nb_hash;
 	BloomHashFunctors _hash_functions;
+
+	class LaunchStatistics {
+
+		public:
+
+			void incr_rounds(size_t more_items) {
+				_update_mutex.lock();
+				_items_handled += more_items;
+				_rounds_lauched++;
+				_update_mutex.unlock();
+			}
+
+			void print() {
+				spdlog::info("Launched {} rounds and handled {} items", _rounds_lauched, _items_handled);
+			}
+
+		private:
+
+			std::mutex _update_mutex;
+
+			size_t _rounds_lauched = 0;
+			size_t _items_handled = 0;
+		
+	};
 
 	const std::string get_dpu_binary_name() {
 		return std::string(DPU_BINARIES_DIR) + "/bloom_filters_dpu";
@@ -649,10 +346,47 @@ private:
 	std::pair<uint32_t, uint32_t> _get_rank_dpu_id_from_item(uint64_t item) {
 		uint64_t h0 = this->_hash_functions(item, 0);
 		uint32_t rank_id = fastrange32(h0, _pim_rankset.get_nb_ranks());
-		int nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
+		size_t nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
 		uint64_t h1 = this->_hash_functions(item, 1); // IMPORTANT: use a different hash otherwise some correlation can happen and some indexes may never be picked
 		uint32_t dpu_id = fastrange32(h1, nb_dpus_in_rank);
 		return std::pair<uint32_t, uint32_t>(rank_id, dpu_id);
+	}
+
+	void _insert_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t &bucket_length, LaunchStatistics& statistics) {
+
+		uint64_t items_sent = 0;
+		for (auto bucket : buckets) {
+			items_sent += bucket[0];
+		}
+
+		_pim_rankset.lock_rank(rank_id); // Lock so that other workers don't stack async calls in-between
+		
+		_pim_rankset.send_data_to_rank_async<uint64_t>(rank_id, "items", 0, buckets, bucket_length);
+		broadcast_mode_async(rank_id, BloomMode::BLOOM_INSERT);
+
+		// Error check
+		auto check_pair = new std::pair<PimRankSet*, uint64_t>(&_pim_rankset, items_sent);
+		auto check_callback_data = new PimCallbackData(rank_id, check_pair, [](size_t rank_id, void* arg) {
+			auto check_pair = static_cast<std::pair<PimRankSet*, uint64_t>*>(arg);
+			uint64_t items_received = check_pair->first->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
+			uint64_t items_sent = check_pair->second;
+			if (items_sent != items_received) {
+				spdlog::error("Rank {}: DPUs received {} items instead of {} (diff = {})", rank_id, items_received, items_sent, (items_received - items_sent));
+			} else {
+				spdlog::debug("Rank {}: DPUs received the right amount of items ({})", rank_id, items_received);
+			}
+			delete check_pair;
+		});
+		_pim_rankset.add_callback_async(check_callback_data);
+		//
+
+		// Launch
+		_pim_rankset.launch_rank_async(rank_id);
+
+		_pim_rankset.unlock_rank(rank_id);
+		spdlog::info("Planned to launch rank {}", rank_id);
+		statistics.incr_rounds(items_sent);
+
 	}
 
 };

@@ -5,7 +5,7 @@
 #include "dpu_utils.h"
 #include "../bloom_filters_common.h"
 
-uint8_t bit_mask [8] = {
+const uint8_t bit_mask [8] = {
     0x01,  //00000001
     0x02,  //00000010
     0x04,  //00000100

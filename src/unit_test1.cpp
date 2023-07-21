@@ -55,8 +55,8 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	bloom_filter->insert(1);
 	weight = bloom_filter->get_weight();
 	CHECK(weight > 0);
-	CHECK(weight <= nb_hash);
-	CHECK(weight <= (1 << bloom_size2));
+	CHECK(weight <= (uint32_t) nb_hash);
+	CHECK(weight <= (uint32_t) (1 << bloom_size2));
 
 	// Insertions should be deterministic
 	INFO("Inserting the same item again and checking weight did not change...");
@@ -76,7 +76,7 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	nb_positive_lookups = bloom_filter->contains(no_items);
 	double fpr = (double) nb_positive_lookups / no_items.size();
 	CHECK(fpr <= 1.0);
-	if (items.size() <= (1 << bloom_size2)) {
+	if (items.size() <= (size_t) (1 << bloom_size2)) {
 		if (fpr > 0.1) {
 			CAPTURE(fpr);
 			WARN("False positive rate is significantly high");

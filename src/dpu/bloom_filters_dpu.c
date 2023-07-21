@@ -14,9 +14,8 @@
 
 #define MAX_BLOOM_DPU_SIZE (1 << MAX_BLOOM_DPU_SIZE2)
 
-#define ITEMS_CACHE_SIZE 128
-
 #define INIT_BLOOM_CACHE_SIZE 2048
+#define ITEMS_CACHE_SIZE 128
 
 BARRIER_INIT(reduce_all_barrier, NR_TASKLETS);
 
@@ -28,7 +27,7 @@ __host uint64_t _nb_hash;
 
 __host uint64_t _dpu_uid;
 // MRAM
-__mram_noinit uint64_t items[MAX_NB_ITEMS_PER_DPU + 8];
+__mram_noinit uint64_t items[MAX_NB_ITEMS_PER_DPU + 1];
 
 // Own variables
 // WRAM

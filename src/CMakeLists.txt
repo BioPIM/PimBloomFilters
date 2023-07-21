@@ -22,6 +22,7 @@ foreach(TARGET ${TARGETS})
     add_executable(${TARGET} ${TARGET}.cpp)
 
     target_include_directories(${TARGET} PRIVATE "." ${DPU_H_INCLUDE})
+    target_compile_options(${TARGET} PRIVATE -Wall -Wextra)
     if((FSANITIZE))
         target_compile_options(${TARGET} PRIVATE -fsanitize=leak)
     endif((FSANITIZE))

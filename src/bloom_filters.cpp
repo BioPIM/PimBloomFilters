@@ -152,28 +152,57 @@ public:
 				uint32_t bucket_idx = dispatch_data.second;
 				size_t nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
 
-				auto &buckets = rank_buckets[rank_id];
+				
 
+				// ERROR IS HERE
+				// debug.lock();
+				auto &buckets = rank_buckets[rank_id];
+				
 				if (buckets.empty()) {
 					buckets.resize(nb_dpus_in_rank);
-					for (size_t d = 0; d < nb_dpus_in_rank; d++) {
-						buckets[d].resize(bucket_size, 0);
+					for (auto &bucket : buckets) {
+						bucket.resize(bucket_size, 0);
 					}
+					
 				}
+				// debug.unlock();
+				////
+				
+
+				
 				
 				std::vector<uint64_t> &bucket = buckets[bucket_idx];
 				bucket[0]++;
 				bucket[bucket[0]] = item;
 
-				debug.lock();
+				
 				if (bucket[0] >= max_nb_items_per_bucket) {
 					done_data_mutex.lock();
+					size_t done_data_idx = done_data.size();
 					done_data.push_back(std::move(buckets));
-					_insert_launch(rank_id, done_data.back(), bucket_length, statistics);
+
+					auto check_pair = new std::pair<std::vector<std::vector<std::vector<uint64_t>>>*, size_t>(&done_data, done_data_idx);
+					auto check_nb_callback_data = new PimCallbackData(rank_id, check_pair, [](size_t rank_id, void* arg) {
+						std::string sizes = std::string();
+						auto pair = static_cast<std::pair<std::vector<std::vector<std::vector<uint64_t>>>*, size_t>*>(arg);
+						auto done_data = pair->first;
+						auto idx = pair->second;
+						uint64_t nb_items = 0;
+						auto buckets = (*done_data)[idx];
+						for (auto bucket : buckets) {
+							nb_items += bucket[0];
+							sizes += std::to_string(bucket[0]) + std::string(" ");
+						}
+						spdlog::debug("Rank {}: reading {} items to send [ {} ]", rank_id, nb_items, sizes);
+						delete pair;
+					});
+
+					_insert_launch(rank_id, done_data.back(), bucket_length, statistics, check_nb_callback_data);
+
 					done_data_mutex.unlock();
 					rank_buckets[rank_id] = std::vector<std::vector<uint64_t>>();
 				}
-				debug.unlock();
+				
 				
 
 			}
@@ -186,7 +215,7 @@ public:
 				if (!buckets.empty()) {
 					done_data_mutex.lock();
 					done_data.push_back(std::move(buckets));
-					_insert_launch(rank_id, done_data.back(), bucket_length, statistics);
+					_insert_launch(rank_id, done_data.back(), bucket_length, statistics, NULL);
 					done_data_mutex.unlock();
 				}
 			}
@@ -352,10 +381,10 @@ private:
 		return std::pair<uint32_t, uint32_t>(rank_id, dpu_id);
 	}
 
-	void _insert_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t &bucket_length, LaunchStatistics& statistics) {
+	void _insert_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t &bucket_length, LaunchStatistics& statistics, PimCallbackData* more_callback) {
 
 		uint64_t items_sent = 0;
-		for (auto bucket : buckets) {
+		for (auto &bucket : buckets) {
 			items_sent += bucket[0];
 		}
 
@@ -365,6 +394,10 @@ private:
 		broadcast_mode_async(rank_id, BloomMode::BLOOM_INSERT);
 
 		// Error check
+		if (more_callback != NULL) {
+			_pim_rankset.add_callback_async(more_callback);
+		}
+
 		auto check_pair = new std::pair<PimRankSet*, uint64_t>(&_pim_rankset, items_sent);
 		auto check_callback_data = new PimCallbackData(rank_id, check_pair, [](size_t rank_id, void* arg) {
 			auto check_pair = static_cast<std::pair<PimRankSet*, uint64_t>*>(arg);

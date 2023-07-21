@@ -184,31 +184,43 @@ public:
     T get_reduced_sum_from_rank_sync(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, size_t length) {
         T result = 0;
         #ifndef IGNORE_DPU_CALLS
-        T results[_nb_dpu_in_rank[rank_id]];
+        auto results = std::vector<T>(_nb_dpu_in_rank[rank_id]);
+        struct dpu_set_t _it_dpu;
+	    uint32_t _it_dpu_idx;
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, &results[_it_dpu_idx]));
         }
 		DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_FROM_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));
+        std::string sizes = std::string();
 		for (size_t d = 0; d < _nb_dpu_in_rank[rank_id]; d++) {
 			result += results[d];
+            sizes += std::to_string(results[d]) + std::string(" ");
         }
+        spdlog::debug("Rank {}: reduced result = {} [ {} ]", rank_id, result, sizes);
         #endif
         return result;
     }
 
     template<typename T>
     void send_data_to_rank_async(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, std::vector<std::vector<T>>& buffers, size_t length) {
+        uint64_t items_sent = 0;
         #ifndef IGNORE_DPU_CALLS
+        struct dpu_set_t _it_dpu;
+	    uint32_t _it_dpu_idx;
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, buffers[_it_dpu_idx].data()));
+            items_sent += buffers[_it_dpu_idx][0];
         }
         DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_TO_DPU, symbol_name, symbol_offset, length, DPU_XFER_ASYNC));
+        spdlog::debug("Rank {}: Sending {} items", rank_id, items_sent);
         #endif
     }
 
     template<typename T>
     void send_data_to_rank_sync(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, std::vector<T> buffer, size_t length) {
         #ifndef IGNORE_DPU_CALLS
+        struct dpu_set_t _it_dpu;
+	    uint32_t _it_dpu_idx;
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, &buffer[_it_dpu_idx]));
         }
@@ -248,15 +260,12 @@ private:
     void _try_print_dpu_logs(size_t rank_id) {
         #ifndef IGNORE_DPU_CALLS
         if (_print_dpu_logs) {
+            struct dpu_set_t _it_dpu;
             DPU_FOREACH(_sets[rank_id], _it_dpu) {
                 DPU_ASSERT(dpu_log_read(_it_dpu, stdout));
             }
         }
         #endif
     }
-	
-    // For iterations
-	struct dpu_set_t _it_dpu;
-	uint32_t _it_dpu_idx;
 
 };

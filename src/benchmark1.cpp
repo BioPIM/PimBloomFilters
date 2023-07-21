@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
 
 	std::vector<uint64_t> items = get_seq_items(nb_items);
 
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::err);
 
 	std::cout << "> Creating filter..." << std::endl;
 	PimBloomFilter *bloom_filter;

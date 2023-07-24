@@ -1,3 +1,6 @@
+#ifndef F1732F2C_3933_4152_B61E_DE811DFBC127
+#define F1732F2C_3933_4152_B61E_DE811DFBC127
+
 #ifdef LOG_DPU
     #include <stdio.h>
     #define dpu_printf(...) printf(__VA_ARGS__)
@@ -8,3 +11,6 @@
     #define dpu_printf_me(...)
     #define dpu_printf_0(...)
 #endif
+
+
+#endif /* F1732F2C_3933_4152_B61E_DE811DFBC127 */

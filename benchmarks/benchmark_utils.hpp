@@ -1,6 +1,10 @@
+#ifndef FD206EEF_A5B2_45D1_9607_FA5C11F4B995
+#define FD206EEF_A5B2_45D1_9607_FA5C11F4B995
+
 #include <vector>
 #include <omp.h>
-#include <stdint.h>
+#include <cstdint>
+#include <cstdio>
 
 #define TIMEIT(f) \
     do { \
@@ -17,3 +21,6 @@ std::vector<uint64_t> get_seq_items(const size_t nb, const uint64_t start_offset
 	}
     return items;
 }
+
+
+#endif /* FD206EEF_A5B2_45D1_9607_FA5C11F4B995 */

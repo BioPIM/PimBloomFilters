@@ -1,44 +1,44 @@
+# ------------------------------------------------------------------------------
+#                                 Dependencies                                  
+# ------------------------------------------------------------------------------
+
 find_package(OpenMP REQUIRED)
-find_package(Catch2 3 REQUIRED)
 find_package(spdlog REQUIRED)
 
-set(FSANITIZE OFF)
+# ------------------------------------------------------------------------------
+#                      Compile DPU binaries                      
+# ------------------------------------------------------------------------------
 
-set(DPU_BINARIES_DIR "dpu")
-get_filename_component(DPU_BINARIES_ABS_DIR ${CMAKE_CURRENT_BINARY_DIR}/${DPU_BINARIES_DIR} REALPATH)
-add_subdirectory(${DPU_BINARIES_DIR})
+add_subdirectory(dpu)
 
-execute_process(COMMAND dpu-pkg-config --cflags dpu OUTPUT_VARIABLE DPU_H_INCLUDE)
-string(REPLACE "-I" "" DPU_H_INCLUDE ${DPU_H_INCLUDE})
-string(REPLACE "\n" "" DPU_H_INCLUDE ${DPU_H_INCLUDE})
+# ------------------------------------------------------------------------------
+#                            Retrieve some DPU info                             
+# ------------------------------------------------------------------------------
 
 execute_process(COMMAND dpu-pkg-config --libs dpu OUTPUT_VARIABLE DPU_LINK)
 string(REPLACE "\n" "" DPU_LINK ${DPU_LINK})
 
-set(TARGETS unit_test1 benchmark1)
+# ------------------------------------------------------------------------------
+#                                Compile library                                
+# ------------------------------------------------------------------------------
 
-foreach(TARGET ${TARGETS})
+add_library(${LIB_NAME} STATIC
+    pim_rankset.cpp
+    pim_bloom_filter.cpp
+    standard_bloom_filter.cpp
+)
 
-    add_executable(${TARGET} ${TARGET}.cpp)
-
-    target_include_directories(${TARGET} PRIVATE "." ${DPU_H_INCLUDE})
-    target_compile_options(${TARGET} PRIVATE -Wall -Wextra)
-    if((FSANITIZE))
-        target_compile_options(${TARGET} PRIVATE -fsanitize=leak)
-    endif((FSANITIZE))
-    if (LOG_DPU)
-        target_compile_definitions(${TARGET} PRIVATE "LOG_DPU")
-    endif(LOG_DPU)
-    target_compile_definitions(${TARGET} PRIVATE
-        DPU_BINARIES_DIR="${DPU_BINARIES_ABS_DIR}"
-    )
-    target_link_libraries(${TARGET} PRIVATE OpenMP::OpenMP_CXX)
-    target_link_libraries(${TARGET} PRIVATE Catch2::Catch2WithMain)
-    target_link_libraries(${TARGET} PRIVATE ${DPU_LINK})
-    target_link_libraries(${TARGET} PRIVATE spdlog::spdlog $<$<BOOL:${MINGW}>:ws2_32>)
-    target_link_libraries(${TARGET} PRIVATE stdc++fs)
-    if((FSANITIZE))
-        target_link_options(${TARGET} PRIVATE -fsanitize=leak)
-    endif((FSANITIZE))
-
-endforeach(TARGET ${TARGETS})
+target_compile_options(${LIB_NAME} PRIVATE -Wall -Wextra)
+if(FSANITIZE)
+    target_compile_options(${LIB_NAME} PRIVATE -fsanitize=leak)
+endif(FSANITIZE)
+if (LOG_DPU)
+    target_compile_definitions(${LIB_NAME} PRIVATE "LOG_DPU")
+endif(LOG_DPU)
+target_link_libraries(${LIB_NAME} PRIVATE OpenMP::OpenMP_CXX)
+target_link_libraries(${LIB_NAME} PRIVATE ${DPU_LINK})
+target_link_libraries(${LIB_NAME} PRIVATE spdlog::spdlog $<$<BOOL:${MINGW}>:ws2_32>)
+target_link_libraries(${LIB_NAME} PRIVATE stdc++fs)
+if(FSANITIZE)
+    target_link_options(${LIB_NAME} PRIVATE -fsanitize=leak)
+endif(FSANITIZE)

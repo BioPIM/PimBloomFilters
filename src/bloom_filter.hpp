@@ -1,3 +1,6 @@
+#ifndef C65E2F03_803F_483F_B91E_8216C4E1F0A0
+#define C65E2F03_803F_483F_B91E_8216C4E1F0A0
+
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -249,3 +252,6 @@ const std::vector<uint64_t> BloomHashFunctions::_random_values = {
     0x454fb57d61c140b8, 0x45eff85f39f57823, 0x53160e742797f51, 0x50fbb1e23447e2c3, 0x40840a5e3bd74566,
     0x4a95950e0b6c009c
 };
+
+
+#endif /* C65E2F03_803F_483F_B91E_8216C4E1F0A0 */

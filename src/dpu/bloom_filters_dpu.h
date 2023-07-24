@@ -1,5 +1,5 @@
-#ifndef BLOOM_FILTER_DPU_H
-#define BLOOM_FILTER_DPU_H
+#ifndef BAA0DC56_5396_444D_BF61_18C9AB62629A
+#define BAA0DC56_5396_444D_BF61_18C9AB62629A
 
 #include <stdint.h>
 #include "dpu_utils.h"
@@ -275,4 +275,5 @@ const uint64_t random_values [256] = {
     0x4a95950e0b6c009c
 };
 
-#endif
+
+#endif /* BAA0DC56_5396_444D_BF61_18C9AB62629A */

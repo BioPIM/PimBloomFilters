@@ -6,7 +6,9 @@
 #include <random>
 #include <algorithm>
 
-#include "run_utils.hpp"
+#include "tests_utils.hpp"
+#include "bloom_filter.hpp"
+#include "standard_bloom_filter.cpp"
 #include "pim_bloom_filter.cpp"
 
 #define NB_THREADS 8
@@ -46,18 +48,18 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	CAPTURE(bloom_size2);
 	CAPTURE(nb_hash);
 
-	PimBloomFilter bloom_filter = PimBloomFilter(bloom_size2, nb_hash, nb_ranks, NB_THREADS, dpu_profile);
+	auto bloom_filter = PimBloomFilter(bloom_size2, nb_hash, NB_THREADS, nb_ranks, dpu_profile);
 
 	INFO("Checking weight after initialization...");
-	uint32_t weight = bloom_filter.get_weight();
+	size_t weight = bloom_filter.get_weight();
 	CHECK(weight == 0);
 
 	INFO("Inserting 1 item and checking weight...");
 	bloom_filter.insert(1);
 	weight = bloom_filter.get_weight();
 	CHECK(weight > 0);
-	CHECK(weight <= (uint32_t) nb_hash);
-	CHECK(weight <= (uint32_t) (1 << bloom_size2));
+	CHECK(weight <= nb_hash);
+	CHECK(weight <= (1 << bloom_size2));
 
 	// Insertions should be deterministic
 	INFO("Inserting the same item again and checking weight did not change...");
@@ -83,5 +85,14 @@ TEST_CASE("Testing Bloom filters with simulator") {
 			WARN("False positive rate is significantly high");
 		}
 	}
+
+	INFO("Checking lookups...");
+	std::vector<uint64_t> other_items = {items[0], no_items[0]};
+	result = bloom_filter.contains_bulk(other_items);
+	CHECK(result[0] == true);
+
+	other_items = {no_items[0], items[0]};
+	result = bloom_filter.contains_bulk(other_items);
+	CHECK(result[1] == true);
 
 }

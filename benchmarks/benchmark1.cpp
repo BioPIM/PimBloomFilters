@@ -1,4 +1,4 @@
-#include "thirdparty/cxxopts/cxxopts.hpp"
+#include "cxxopts/cxxopts.hpp"
 #include "spdlog/spdlog.h"
 
 #include <stdint.h>
@@ -7,7 +7,7 @@
 #include <random>
 #include <algorithm>
 
-#include "run_utils.hpp"
+#include "benchmark_utils.hpp"
 #include "pim_bloom_filter.cpp"
 
 #define BLOOM_SIZE (1 << BLOOM_SIZE2)

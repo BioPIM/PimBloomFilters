@@ -8,19 +8,21 @@
 #include <algorithm>
 
 #include "run_utils.hpp"
-#include "bloom_filters.cpp"
+#include "pim_bloom_filter.cpp"
 
 #define BLOOM_SIZE (1 << BLOOM_SIZE2)
+
+constexpr size_t NB_THREADS = 8; 
 
 int main(int argc, char** argv) {
 
     cxxopts::Options options("main_test2", "Run and time PIM Bloom filters micro-benchmarks");
 
     options.add_options()
-        ("k,hash", "Number of hash functions", cxxopts::value<int>()->default_value("8"))
-        ("r,rank", "Number of DPUs ranks", cxxopts::value<int>()->default_value("1"))
-        ("m,size2", "Size2 of the filter", cxxopts::value<int>()->default_value("20"))
-        ("n,items", "Number of items", cxxopts::value<int>()->default_value("10000"))
+        ("k,hash", "Number of hash functions", cxxopts::value<size_t>()->default_value("8"))
+        ("r,rank", "Number of DPUs ranks", cxxopts::value<size_t>()->default_value("1"))
+        ("m,size2", "Size2 of the filter", cxxopts::value<size_t>()->default_value("20"))
+        ("n,items", "Number of items", cxxopts::value<size_t>()->default_value("10000"))
         ("s,simulator", "Use the simulator", cxxopts::value<bool>()->default_value("false"))
         ("h,help", "Print usage")
     ;
@@ -32,32 +34,32 @@ int main(int argc, char** argv) {
         exit(0);
     }
 
-    int nb_ranks = result["rank"].as<int>();
-    int nb_hash = result["hash"].as<int>();
-    int bloom_size2 = result["size2"].as<int>();
-    int nb_items = result["items"].as<int>();
+    size_t nb_ranks = result["rank"].as<size_t>();
+    size_t nb_hash = result["hash"].as<size_t>();
+    size_t bloom_size2 = result["size2"].as<size_t>();
+    size_t nb_items = result["items"].as<size_t>();
     const char* dpu_profile = result["simulator"].as<bool>() ? DpuProfile::SIMULATOR : DpuProfile::HARDWARE;
 
 	std::vector<uint64_t> items = get_seq_items(nb_items);
 
-    spdlog::set_level(spdlog::level::err);
+    spdlog::set_level(spdlog::level::debug);
 
 	std::cout << "> Creating filter..." << std::endl;
 	PimBloomFilter *bloom_filter;
-    TIMEIT(bloom_filter = new PimBloomFilter(nb_ranks, bloom_size2, nb_hash, dpu_profile));
+    TIMEIT(bloom_filter = new PimBloomFilter(bloom_size2, nb_hash, NB_THREADS, nb_ranks, dpu_profile));
 
     std::cout << "> Inserting many items..." << std::endl;
-	TIMEIT(bloom_filter->insert(items));
+	TIMEIT(bloom_filter->insert_bulk(items));
 
     // std::cout << "> Computing weight..." << std::endl;
-    // uint32_t weight;
+    // size_t weight;
     // TIMEIT(weight = bloom_filter->get_weight());
     // std::cout << "Weight is " << weight << std::endl;
 
     // std::cout << "> Querying all inserted items in a random order..." << std::endl;
 	// auto rng = std::default_random_engine{};
 	// std::shuffle(std::begin(items), std::end(items), rng);
-	// TIMEIT(bloom_filter->contains(items));
+	// TIMEIT(bloom_filter->contains_bulk(items));
 
     std::cout << "> Cleaning filter..." << std::endl;
 	delete bloom_filter;

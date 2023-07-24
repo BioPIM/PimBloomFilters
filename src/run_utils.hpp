@@ -10,9 +10,9 @@
         std::cout << "Took " << stop - start << " seconds" << std::endl; \
     } while (0)
 
-std::vector<uint64_t> get_seq_items(const int nb, const int start_offset = 0) {
+std::vector<uint64_t> get_seq_items(const size_t nb, const uint64_t start_offset = 0) {
     std::vector<uint64_t> items(nb);
-	for (int i = 0; i < nb; i++) {
+	for (size_t i = 0; i < nb; i++) {
 		items[i] = i + start_offset;
 	}
     return items;

@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <chrono>
 #include <thread>
+#include <memory>
 
 // #define IGNORE_DPU_CALLS
 
@@ -23,20 +24,10 @@ enum DpuProfile {
     SIMULATOR,
 };
 
-class PimCallbackData {
 
-public:
-
-    PimCallbackData(size_t rank_id, void* arg, std::function<void (size_t, void*)> func) : _rank_id(rank_id), _arg(arg), _func(func) {}
-    void run() { _func(_rank_id, _arg); }
-    size_t get_rank_id() { return _rank_id; }
-
-private:
-    size_t _rank_id;
-    void* _arg;
-    std::function<void (size_t, void*)> _func;
-
-};
+/* -------------------------------------------------------------------------- */
+/*                        Management of a set of ranks                        */
+/* -------------------------------------------------------------------------- */
 
 class PimRankSet {
 
@@ -142,18 +133,18 @@ public:
     void launch_rank_async(size_t rank_id) {
         #ifndef IGNORE_DPU_CALLS
         DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_ASYNCHRONOUS));
-        auto callback_data = new PimCallbackData(rank_id, this, [](size_t rank_id, void* arg) {
+        add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
             auto rankset = static_cast<PimRankSet*>(arg);
             rankset->_rank_finished_callback(rank_id);
         });
-        add_callback_async(callback_data);
         #else
         _rank_finished_callback(rank_id);
         #endif
 	}
 
-    void add_callback_async(PimCallbackData* callback_data) {
-        DPU_ASSERT(dpu_callback(_sets[callback_data->get_rank_id()], PimRankSet::_generic_callback, callback_data, DPU_CALLBACK_ASYNC));
+    void add_callback_async(size_t rank_id, void* arg, std::function<void (size_t, void*)> func) {
+        auto callback_data = new CallbackData(rank_id, arg, func);
+        DPU_ASSERT(dpu_callback(_sets[rank_id], PimRankSet::_generic_callback, callback_data, DPU_CALLBACK_ASYNC));
     }
 
     void lock_rank(size_t rank_id) {
@@ -231,9 +222,36 @@ private:
 
     std::vector<std::mutex> _rank_mutexes;
 
-    // Callbacks
+    std::string _get_dpu_profile(DpuProfile profile) {
+        if (profile == DpuProfile::HARDWARE) {
+            return "backend=hw";
+        } else if (profile == DpuProfile::SIMULATOR) {
+            return "backend=simulator";
+        } else {
+            return "";
+        }
+    }
+
+    /* -------------------------------- Callbacks ------------------------------- */
+
+    class CallbackData {
+
+        public:
+
+            CallbackData(size_t rank_id, void* arg, std::function<void (size_t, void*)> func) : _rank_id(rank_id), _arg(arg), _func(func) {}
+            void run() { _func(_rank_id, _arg); }
+            size_t get_rank_id() { return _rank_id; }
+
+        private:
+        
+            size_t _rank_id;
+            void* _arg;
+            std::function<void (size_t, void*)> _func;
+
+        };
+
     static dpu_error_t _generic_callback([[maybe_unused]] struct dpu_set_t _set, [[maybe_unused]] uint32_t _id, void* arg) {
-        auto callback_data = static_cast<PimCallbackData*>(arg);
+        auto callback_data = static_cast<CallbackData*>(arg);
         callback_data->run();
         delete callback_data;
         return DPU_OK;
@@ -245,7 +263,8 @@ private:
         _trace_rank_done();
 	}
 
-    // Logging
+    /* --------------------------------- Logging -------------------------------- */
+
     bool _print_dpu_logs;
 
     void _try_print_dpu_logs(size_t rank_id) {
@@ -259,23 +278,18 @@ private:
         #endif
     }
 
-    std::string _get_dpu_profile(DpuProfile profile) {
-        if (profile == DpuProfile::HARDWARE) {
-            return "backend=hw";
-        } else if (profile == DpuProfile::SIMULATOR) {
-            return "backend=simulator";
-        } else {
-            return "";
-        }
-    }
-
 };
 
-class PimUID {
+
+/* -------------------------------------------------------------------------- */
+/*                       Identifier of a DPU in the set                       */
+/* -------------------------------------------------------------------------- */
+
+class PimUnitUID {
 
     public:
 
-        PimUID(size_t rank_id, size_t dpu_id) : _rank_id(rank_id), _dpu_id(dpu_id) {}
+        PimUnitUID(size_t rank_id, size_t dpu_id) : _rank_id(rank_id), _dpu_id(dpu_id) {}
 
         size_t get_rank_id() {
             return _rank_id;
@@ -289,6 +303,33 @@ class PimUID {
         
         size_t _rank_id;
         size_t _dpu_id;
+
+};
+
+
+/* -------------------------------------------------------------------------- */
+/*           Abstract class to dispatch something to a specific DPU           */
+/* -------------------------------------------------------------------------- */
+
+template <class T>
+class PimDispatcher {
+
+	public:
+
+		PimDispatcher(PimRankSet& pim_rankset) : _pim_rankset(pim_rankset) {}
+		
+		virtual PimUnitUID dispatch(const T& arg) = 0;
+	
+	protected:
+
+		PimRankSet& get_pim_rankset() {
+			return _pim_rankset;
+		}
+		~PimDispatcher() = default;
+
+	private:
+
+		PimRankSet& _pim_rankset;
 
 };
 

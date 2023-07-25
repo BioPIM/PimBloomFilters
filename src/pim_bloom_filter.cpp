@@ -18,48 +18,27 @@ void _worker_done() {}
 /*                              Item dispatchers                              */
 /* -------------------------------------------------------------------------- */
 
-class PimItemDispatcher {
+class HashPimItemDispatcher : public PimDispatcher<uint64_t> {
 
 	public:
 
-		PimItemDispatcher(PimRankSet& pim_rankset) : _pim_rankset(pim_rankset) {}
-		
-		virtual PimUID dispatch(const uint64_t& item) = 0;
-	
-	protected:
+		HashPimItemDispatcher(PimRankSet& pim_rankset) : PimDispatcher<uint64_t>(pim_rankset), _hash_functions(2) {}
 
-		PimRankSet& get_pim_rankset() {
-			return _pim_rankset;
-		}
-		~PimItemDispatcher() = default;
-
-	private:
-
-		PimRankSet& _pim_rankset;
-
-};
-
-class HashPimItemDispatcher : public PimItemDispatcher {
-
-	public:
-
-		HashPimItemDispatcher(PimRankSet& pim_rankset) : PimItemDispatcher(pim_rankset), _hash_functions(2) {}
-
-		PimUID dispatch(const uint64_t& item) override {
+		PimUnitUID dispatch(const uint64_t& item) override {
 			uint64_t h0 = _hash_functions(item, 0);
 			size_t rank_id = fastrange32(h0, get_pim_rankset().get_nb_ranks());
 			size_t nb_dpus_in_rank = get_pim_rankset().get_nb_dpu_in_rank(rank_id);
 			uint64_t h1 = _hash_functions(item, 1); // IMPORTANT: use a different hash otherwise some correlation can happen and some indexes may never be picked
 			size_t dpu_id = fastrange32(h1, nb_dpus_in_rank);
-			return PimUID(rank_id, dpu_id);
+			return PimUnitUID(rank_id, dpu_id);
 		}
 	
 	private:
 
 		BloomHashFunctions _hash_functions;
 
-		static inline size_t fastrange32(uint32_t word, uint32_t p) {
-			return static_cast<size_t>((static_cast<uint64_t>(word) * static_cast<uint64_t>(p)) >> 32);
+		static inline size_t fastrange32(uint32_t key, uint32_t idx) {
+			return static_cast<size_t>((static_cast<uint64_t>(key) * static_cast<uint64_t>(idx)) >> 32);
 		}
 
 
@@ -83,7 +62,7 @@ class PimBloomFilter : public BulkBloomFilter {
 							_pim_rankset(PimRankSet(nb_ranks, nb_threads, dpu_profile, get_dpu_binary_name().c_str())),
 							_item_dispatcher(HashPimItemDispatcher(_pim_rankset)) {
 
-			// static_assert(std::is_base_of<PimItemDispatcher, ItemDispatcher>::value, "type parameter of this class must derive from PimItemDispatcher");
+			static_assert(std::is_base_of<PimDispatcher<uint64_t>, ItemDispatcher>::value, "type parameter of this class must derive from PimDispatcher");
 
 			if (nb_ranks < 1) {
 				throw std::invalid_argument(std::string("Error: number of DPUs ranks must be >= 1"));
@@ -149,7 +128,7 @@ class PimBloomFilter : public BulkBloomFilter {
 				// Consider a partition of the items
 				for (size_t i = worker_id; i < nb_items; i += nb_workers) {
 					uint64_t item = items[i];
-					PimUID dispatch_data = _item_dispatcher.dispatch(item);
+					auto dispatch_data = _item_dispatcher.dispatch(item);
 					size_t rank_id = dispatch_data.get_rank_id();
 					size_t bucket_idx = dispatch_data.get_dpu_id();
 					size_t nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
@@ -277,23 +256,20 @@ class PimBloomFilter : public BulkBloomFilter {
 			broadcast_mode_async(rank_id, BloomMode::BLOOM_INSERT);
 
 			// Error checking for number of items
-			// uint64_t items_sent = 0;
-			// for (auto &bucket : buckets) {
-			// 	items_sent += bucket[0];
-			// }
-			// auto check_pair = new std::pair<PimRankSet*, uint64_t>(&_pim_rankset, items_sent);
-			// auto check_callback_data = new PimCallbackData(rank_id, check_pair, [](size_t rank_id, void* arg) {
-			// 	auto check_pair = static_cast<std::pair<PimRankSet*, uint64_t>*>(arg);
-			// 	uint64_t items_received = check_pair->first->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
-			// 	uint64_t items_sent = check_pair->second;
-			// 	if (items_sent != items_received) {
-			// 		spdlog::error("Rank {}: DPUs received {} items instead of {} (diff = {})", rank_id, items_received, items_sent, (items_received - items_sent));
-			// 	} else {
-			// 		spdlog::debug("Rank {}: DPUs received the right amount of items ({})", rank_id, items_received);
-			// 	}
-			// 	delete check_pair;
-			// });
-			// _pim_rankset.add_callback_async(check_callback_data);
+			uint64_t items_sent = 0;
+			for (auto &bucket : buckets) {
+				items_sent += bucket[0];
+			}
+
+			_pim_rankset.add_callback_async(rank_id, &_pim_rankset, [items_sent](size_t rank_id, void* arg) {
+				auto rankset = static_cast<PimRankSet*>(arg);
+				uint64_t items_received = rankset->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
+				if (items_sent != items_received) {
+					spdlog::error("Rank {}: DPUs received {} items instead of {} (diff = {})", rank_id, items_received, items_sent, (items_received - items_sent));
+				} else {
+					spdlog::debug("Rank {}: DPUs received the right amount of items ({})", rank_id, items_received);
+				}
+			});
 			// ----------------- //
 
 			_pim_rankset.launch_rank_async(rank_id);

@@ -5,8 +5,6 @@
 #include <queue>
 #include <thread>
 
-#include "spdlog/spdlog.h"
-
 #include "pim_rankset.cpp"
 #include "pim_bloom_filter_common.h"
 
@@ -256,20 +254,20 @@ class PimBloomFilter : public BulkBloomFilter {
 			broadcast_mode_async(rank_id, BloomMode::BLOOM_INSERT);
 
 			// Error checking for number of items
-			uint64_t items_sent = 0;
-			for (auto &bucket : buckets) {
-				items_sent += bucket[0];
-			}
+			// uint64_t items_sent = 0;
+			// for (auto &bucket : buckets) {
+			// 	items_sent += bucket[0];
+			// }
 
-			_pim_rankset.add_callback_async(rank_id, &_pim_rankset, [items_sent](size_t rank_id, void* arg) {
-				auto rankset = static_cast<PimRankSet*>(arg);
-				uint64_t items_received = rankset->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
-				if (items_sent != items_received) {
-					spdlog::error("Rank {}: DPUs received {} items instead of {} (diff = {})", rank_id, items_received, items_sent, (items_received - items_sent));
-				} else {
-					spdlog::debug("Rank {}: DPUs received the right amount of items ({})", rank_id, items_received);
-				}
-			});
+			// _pim_rankset.add_callback_async(rank_id, &_pim_rankset, [items_sent](size_t rank_id, void* arg) {
+			// 	auto rankset = static_cast<PimRankSet*>(arg);
+			// 	uint64_t items_received = rankset->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
+			// 	if (items_sent != items_received) {
+			// 		spdlog::error("Rank {}: DPUs received {} items instead of {} (diff = {})", rank_id, items_received, items_sent, (items_received - items_sent));
+			// 	} else {
+			// 		spdlog::debug("Rank {}: DPUs received the right amount of items ({})", rank_id, items_received);
+			// 	}
+			// });
 			// ----------------- //
 
 			_pim_rankset.launch_rank_async(rank_id);

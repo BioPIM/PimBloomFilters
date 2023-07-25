@@ -18,6 +18,8 @@
 
 TEST_CASE("Testing Bloom filters with sync basic implementation") {
 
+	spdlog::set_level(spdlog::level::info);
+
 	std::vector<uint64_t> items = get_seq_items(NB_ITEMS);
 	std::vector<uint64_t> no_items = get_seq_items(NB_NO_ITEMS, NB_ITEMS);
 
@@ -38,7 +40,7 @@ TEST_CASE("Testing Bloom filters with sync basic implementation") {
 	CAPTURE(bloom_size2);
 	CAPTURE(nb_hash);
 
-	auto bloom_filter = SyncBasicBloomFilter(bloom_size2, nb_hash, NB_THREADS);
+	auto bloom_filter = SyncCacheBloomFilter(bloom_size2, nb_hash, NB_THREADS);
 
 	INFO("Checking weight after initialization...");
 	size_t weight = bloom_filter.get_weight();

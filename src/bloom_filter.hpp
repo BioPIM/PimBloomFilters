@@ -8,6 +8,8 @@
 #include <string>
 #include <omp.h>
 
+#include "spdlog/spdlog.h"
+
 
 /* -------------------------------------------------------------------------- */
 /*                           Bloom filter interface                           */

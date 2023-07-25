@@ -8,20 +8,18 @@
 #include <algorithm>
 
 #include "benchmark_utils.hpp"
-#include "pim_bloom_filter.cpp"
+#include "standard_bloom_filter.cpp"
 
 constexpr size_t NB_THREADS = 8; 
 
 int main(int argc, char** argv) {
 
-    cxxopts::Options options("benchmark1", "Run and time PIM Bloom filters micro-benchmarks");
+    cxxopts::Options options("benchmark2", "Run and time standard Bloom filters micro-benchmarks");
 
     options.add_options()
         ("k,hash", "Number of hash functions", cxxopts::value<size_t>()->default_value("8"))
-        ("r,rank", "Number of DPUs ranks", cxxopts::value<size_t>()->default_value("1"))
         ("m,size2", "Size2 of the filter", cxxopts::value<size_t>()->default_value("20"))
         ("n,items", "Number of items", cxxopts::value<size_t>()->default_value("10000"))
-        ("s,simulator", "Use the simulator", cxxopts::value<bool>()->default_value("false"))
         ("h,help", "Print usage")
     ;
 
@@ -32,19 +30,17 @@ int main(int argc, char** argv) {
         exit(0);
     }
 
-    size_t nb_ranks = result["rank"].as<size_t>();
     size_t nb_hash = result["hash"].as<size_t>();
     size_t bloom_size2 = result["size2"].as<size_t>();
     size_t nb_items = result["items"].as<size_t>();
-    DpuProfile dpu_profile = result["simulator"].as<bool>() ? DpuProfile::SIMULATOR : DpuProfile::HARDWARE;
 
 	std::vector<uint64_t> items = get_seq_items(nb_items);
 
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::debug);
 
 	std::cout << "> Creating filter..." << std::endl;
-	PimBloomFilter<HashPimItemDispatcher> *bloom_filter;
-    TIMEIT(bloom_filter = new PimBloomFilter<HashPimItemDispatcher>(bloom_size2, nb_hash, NB_THREADS, nb_ranks, dpu_profile));
+	BasicBloomFilter *bloom_filter;
+    TIMEIT(bloom_filter = new BasicBloomFilter(bloom_size2, nb_hash, NB_THREADS));
 
     std::cout << "> Inserting many items..." << std::endl;
 	TIMEIT(bloom_filter->insert_bulk(items));

@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <stdint.h>
-#include <stdio.h>
+#include <cstdio>
 #include <iostream>
 #include <random>
 #include <algorithm>
@@ -24,22 +24,21 @@ TEST_CASE("Testing Bloom filters with sync basic implementation") {
 	INFO("Creating filter...");
 
 	size_t bloom_size2, nb_hash;
-	const char* dpu_profile = DpuProfile::SIMULATOR;
 
 	SECTION("") {
-		bloom_size2 = 30;
+		bloom_size2 = 24;
 		SECTION("") { nb_hash = 1; }
 		SECTION("") { nb_hash = 8; }
 	}
 	SECTION("") {
-		bloom_size2 =24;
-		nb_hash = 4;
+		bloom_size2 = 16;
+		nb_hash = 2;
 	}
 
 	CAPTURE(bloom_size2);
 	CAPTURE(nb_hash);
 
-	auto bloom_filter = BasicBloomFilter(bloom_size2, nb_hash, NB_THREADS);
+	auto bloom_filter = SyncBasicBloomFilter(bloom_size2, nb_hash, NB_THREADS);
 
 	INFO("Checking weight after initialization...");
 	size_t weight = bloom_filter.get_weight();
@@ -51,6 +50,9 @@ TEST_CASE("Testing Bloom filters with sync basic implementation") {
 	CHECK(weight > 0);
 	CHECK(weight <= nb_hash);
 	CHECK(weight <= (1 << bloom_size2));
+
+    INFO("Checking single lookup...");
+    CHECK(bloom_filter.contains(1));
 
 	// Insertions should be deterministic
 	INFO("Inserting the same item again and checking weight did not change...");

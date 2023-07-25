@@ -24,7 +24,7 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	INFO("Creating filter...");
 
 	size_t nb_ranks, bloom_size2, nb_hash;
-	const char* dpu_profile = DpuProfile::SIMULATOR;
+	DpuProfile dpu_profile = DpuProfile::SIMULATOR;
 
 	SECTION("") {
 		nb_ranks = 1;
@@ -48,7 +48,7 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	CAPTURE(bloom_size2);
 	CAPTURE(nb_hash);
 
-	auto bloom_filter = PimBloomFilter(bloom_size2, nb_hash, NB_THREADS, nb_ranks, dpu_profile);
+	auto bloom_filter = PimBloomFilter<HashPimItemDispatcher>(bloom_size2, nb_hash, NB_THREADS, nb_ranks, dpu_profile);
 
 	INFO("Checking weight after initialization...");
 	size_t weight = bloom_filter.get_weight();
@@ -60,6 +60,9 @@ TEST_CASE("Testing Bloom filters with simulator") {
 	CHECK(weight > 0);
 	CHECK(weight <= nb_hash);
 	CHECK(weight <= (1 << bloom_size2));
+	
+	INFO("Checking single lookup...");
+    CHECK(bloom_filter.contains(1));
 
 	// Insertions should be deterministic
 	INFO("Inserting the same item again and checking weight did not change...");

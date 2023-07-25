@@ -8,6 +8,7 @@
 #include <string>
 #include <omp.h>
 
+
 /* -------------------------------------------------------------------------- */
 /*                           Bloom filter interface                           */
 /* -------------------------------------------------------------------------- */
@@ -16,9 +17,12 @@ class IBloomFilter {
 
     public:
 
-        IBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : _size2(size2), _nb_hash(nb_hash), _nb_threads(nb_threads) {
-            _size = (1 << _size2);
-		    _size_reduced = _size - 1;
+        /// @brief Bloom filter data structure
+        /// @param size2 power of 2 to use for the size that will be 2^size2
+        /// @param nb_hash number of hash functions
+        /// @param nb_threads number of threads for multithreaded sections
+        IBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : _size2(size2), _nb_hash(nb_hash), _nb_threads(nb_threads),
+                _size(1 << _size2), _size_reduced(_size - 1) {
 
             if (size2 < 3) {
                 throw std::invalid_argument(std::string("Error: bloom size2 must be >= 3"));
@@ -31,18 +35,41 @@ class IBloomFilter {
 
         virtual ~IBloomFilter() = default;
 
+        /// @brief Insert one item in the filter
+        /// @param item item to insert
         virtual void insert(const uint64_t& item) = 0;
+
+        /// @brief Insert several items at once in the filter
+        /// @param items vector of items to insert
         virtual void insert_bulk(const std::vector<uint64_t>& items) = 0;
+
+        /// @brief Lookup one item in the filter
+        /// @param item item to lookup
+        /// @return whether the item is found in the filter or not
         virtual bool contains(const uint64_t& item) = 0;
+
+        /// @brief Lookup several items at once in the filter
+        /// @param items items to lookup
+        /// @return vector of lookup results in the same order as the input
         virtual std::vector<bool> contains_bulk(const std::vector<uint64_t>& items) = 0;
 
         /// @brief Computes the weight of the filter
 		/// @return number of bits set to 1 in the filter
         virtual size_t get_weight() = 0;
 
+        /// @brief Get the filter data
+        /// @return vector representing the filter
+        virtual const std::vector<uint8_t>& get_data() = 0;
+
         size_t get_nb_hash() { return _nb_hash; }
 
     protected:
+
+        size_t _get_nb_threads() { return _nb_threads; }
+        size_t _get_size() { return _size; }
+        uint8_t _get_bit_mask(size_t idx) { return _bit_mask[idx]; }
+
+    private:
 
         size_t _size2;
         size_t _nb_hash;
@@ -50,7 +77,7 @@ class IBloomFilter {
         size_t _size;
         size_t _size_reduced;
 
-        const std::vector<uint8_t> _bit_mask = {
+        std::vector<uint8_t> _bit_mask = {
             0x01,  //00000001
             0x02,  //00000010
             0x04,  //00000100
@@ -96,8 +123,9 @@ class IterativeBloomFilter : public IBloomFilter {
         IterativeBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : IBloomFilter(size2, nb_hash, nb_threads) {};
 
         void insert_bulk(const std::vector<uint64_t>& items) override {
-            for (auto item : items) {
-                insert(item);
+            #pragma omp parallel for num_threads(_get_nb_threads())
+            for (size_t i = 0; i < items.size(); i++) {
+                insert(items[i]);
             }
         }
 
@@ -120,9 +148,10 @@ class BucketIterativeBloomFilter : public IBloomFilter {
 
         BucketIterativeBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : IBloomFilter(size2, nb_hash, nb_threads) {};
 
-        void insert_bulk(const std::vector<uint64_t>& items) override {
-            for (auto item : items) {
-                insert(item);
+        void insert_bulk(const std::vector<uint64_t>& items) override { // TODO
+            #pragma omp parallel for num_threads(_get_nb_threads())
+            for (size_t i = 0; i < items.size(); i++) {
+                insert(items[i]);
             }
         }
 
@@ -163,7 +192,7 @@ class BloomHashFunctions {
             return hash64(key, _seeds[idx]);
         }
 
-        static uint64_t hash64(uint64_t key, uint64_t seed) {
+        static inline uint64_t hash64(uint64_t key, uint64_t seed) {
             uint64_t hash = seed;
             hash ^= (hash <<  7) ^  key * (hash >> 3) ^ (~((hash << 11) + (key ^ (hash >> 5))));
             hash = (~hash) + (hash << 21); // hash = (hash << 21) - hash - 1;
@@ -188,7 +217,7 @@ private:
 
     size_t _nb_functions;
 
-    const std::vector<uint64_t> _base_seeds = {
+    std::vector<uint64_t> _base_seeds = {
         0xAAAAAAAA55555555ULL,  0x33333333CCCCCCCCULL,  0x6666666699999999ULL,  0xB5B5B5B54B4B4B4BULL,
         0xAA55AA5555335533ULL,  0x33CC33CCCC66CC66ULL,  0x6699669999B599B5ULL,  0xB54BB54B4BAA4BAAULL,
         0xAA33AA3355CC55CCULL,  0x33663366CC99CC99ULL

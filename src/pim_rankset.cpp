@@ -1,4 +1,5 @@
-#pragma once
+#ifndef F347470E_1730_41E9_9AE3_45A884CD2BFF
+#define F347470E_1730_41E9_9AE3_45A884CD2BFF
 
 #include "spdlog/spdlog.h"
 
@@ -17,14 +18,10 @@
 
 void _trace_rank_done() {}
 
-class DpuProfile {
-public:
-    const static char* HARDWARE;
-    const static char* SIMULATOR;
+enum DpuProfile {
+    HARDWARE,
+    SIMULATOR,
 };
-
-const char* DpuProfile::HARDWARE  = "backend=hw";
-const char* DpuProfile::SIMULATOR = "backend=simulator";
 
 class PimCallbackData {
 
@@ -47,7 +44,7 @@ public:
     
     PimRankSet(size_t nb_ranks,
                size_t nb_threads = 8UL,
-               const char* dpu_profile = DpuProfile::HARDWARE,
+               DpuProfile dpu_profile = DpuProfile::HARDWARE,
                const char* binary_name = NULL) : _nb_ranks(nb_ranks), _nb_threads(nb_threads) {
         
         _sets.resize(_nb_ranks);
@@ -57,7 +54,7 @@ public:
         #ifndef IGNORE_DPU_CALLS
         #pragma omp parallel for num_threads(_nb_threads)
 		for (size_t rank_id = 0; rank_id < _nb_ranks; rank_id++) {
-			DPU_ASSERT(dpu_alloc_ranks(1, dpu_profile, &_sets[rank_id]));
+			DPU_ASSERT(dpu_alloc_ranks(1, _get_dpu_profile(dpu_profile).c_str(), &_sets[rank_id]));
             if (binary_name != NULL) {
 			    load_binary(binary_name, rank_id);
             }
@@ -185,8 +182,8 @@ public:
         T result = 0;
         #ifndef IGNORE_DPU_CALLS
         auto results = std::vector<T>(_nb_dpu_in_rank[rank_id]);
-        struct dpu_set_t _it_dpu;
-	    uint32_t _it_dpu_idx;
+        struct dpu_set_t _it_dpu = dpu_set_t{};
+	    uint32_t _it_dpu_idx = 0;
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, &results[_it_dpu_idx]));
         }
@@ -201,8 +198,8 @@ public:
     template<typename T>
     void send_data_to_rank_async(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, std::vector<std::vector<T>>& buffers, size_t length) {
         #ifndef IGNORE_DPU_CALLS
-        struct dpu_set_t _it_dpu;
-	    uint32_t _it_dpu_idx;
+        struct dpu_set_t _it_dpu = dpu_set_t{};
+	    uint32_t _it_dpu_idx = 0;
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, buffers[_it_dpu_idx].data()));
         }
@@ -213,8 +210,8 @@ public:
     template<typename T>
     void send_data_to_rank_sync(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, std::vector<T> buffer, size_t length) {
         #ifndef IGNORE_DPU_CALLS
-        struct dpu_set_t _it_dpu;
-	    uint32_t _it_dpu_idx;
+        struct dpu_set_t _it_dpu = dpu_set_t{};
+	    uint32_t _it_dpu_idx = 0;
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, &buffer[_it_dpu_idx]));
         }
@@ -243,7 +240,7 @@ private:
     }
 
     void _rank_finished_callback(size_t rank_id) {
-        spdlog::info("DPU callback: rank {} has finished", rank_id);
+        spdlog::debug("DPU callback: rank {} has finished", rank_id);
         _try_print_dpu_logs(rank_id);
         _trace_rank_done();
 	}
@@ -254,7 +251,7 @@ private:
     void _try_print_dpu_logs(size_t rank_id) {
         #ifndef IGNORE_DPU_CALLS
         if (_print_dpu_logs) {
-            struct dpu_set_t _it_dpu;
+            struct dpu_set_t _it_dpu = dpu_set_t{};
             DPU_FOREACH(_sets[rank_id], _it_dpu) {
                 DPU_ASSERT(dpu_log_read(_it_dpu, stdout));
             }
@@ -262,4 +259,38 @@ private:
         #endif
     }
 
+    std::string _get_dpu_profile(DpuProfile profile) {
+        if (profile == DpuProfile::HARDWARE) {
+            return "backend=hw";
+        } else if (profile == DpuProfile::SIMULATOR) {
+            return "backend=simulator";
+        } else {
+            return "";
+        }
+    }
+
 };
+
+class PimUID {
+
+    public:
+
+        PimUID(size_t rank_id, size_t dpu_id) : _rank_id(rank_id), _dpu_id(dpu_id) {}
+
+        size_t get_rank_id() {
+            return _rank_id;
+        }
+
+        size_t get_dpu_id() {
+            return _dpu_id;
+        }
+    
+    private:
+        
+        size_t _rank_id;
+        size_t _dpu_id;
+
+};
+
+
+#endif /* F347470E_1730_41E9_9AE3_45A884CD2BFF */

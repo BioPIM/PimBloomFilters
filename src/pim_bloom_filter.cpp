@@ -59,8 +59,9 @@ class HashPimItemDispatcher : public PimItemDispatcher {
 		BloomHashFunctions _hash_functions;
 
 		static inline size_t fastrange32(uint32_t word, uint32_t p) {
-			return static_cast<size_t>(static_cast<uint64_t>(word) * (static_cast<uint64_t>(p) >> 32));
+			return static_cast<size_t>((static_cast<uint64_t>(word) * static_cast<uint64_t>(p)) >> 32);
 		}
+
 
 };
 

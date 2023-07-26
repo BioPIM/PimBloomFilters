@@ -5,7 +5,7 @@ project(BloomFilters VERSION 0.1 LANGUAGES C CXX DESCRIPTION "Bloom filters on C
 set(CMAKE_C_COMPILER "/usr/bin/clang")
 set(CMAKE_CXX_COMPILER "/usr/bin/g++")
 
-set (CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 17)
 set(LIB_NAME "BloomFilters")
 
 # ------------------------------------------------------------------------------

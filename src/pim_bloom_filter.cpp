@@ -55,7 +55,7 @@ class PimBloomFilter : public BulkBloomFilter {
 		PimBloomFilter(	size_t size2,
 						size_t nb_hash,
 						size_t nb_threads,
-						size_t nb_ranks,
+						size_t nb_ranks = 8,
 						DpuProfile dpu_profile = DpuProfile::HARDWARE) : BulkBloomFilter(size2, nb_hash, nb_threads),
 							_pim_rankset(PimRankSet(nb_ranks, nb_threads, dpu_profile, get_dpu_binary_name().c_str())),
 							_item_dispatcher(HashPimItemDispatcher(_pim_rankset)) {
@@ -84,16 +84,16 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			size_t nb_hash_functions = get_nb_hash();
 			_pim_rankset.for_each_rank([this, nb_hash_functions](size_t rank_id) {
-				_pim_rankset.broadcast_to_rank_sync(rank_id, "_dpu_size2", 0, &_dpu_size2, sizeof(_dpu_size2));
-				_pim_rankset.broadcast_to_rank_sync(rank_id, "_nb_hash", 0, &nb_hash_functions, sizeof(nb_hash_functions));
-				broadcast_mode_sync(rank_id, BloomMode::BLOOM_INIT);
+				_pim_rankset.broadcast_to_rank_sync(rank_id, "dpu_size2", 0, &_dpu_size2, sizeof(_dpu_size2));
+				_pim_rankset.broadcast_to_rank_sync(rank_id, "nb_hash", 0, &nb_hash_functions, sizeof(nb_hash_functions));
+				broadcast_mode_sync(rank_id, INIT_TKN);
 
 				int nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
 				auto uids = std::vector<size_t>(nb_dpus_in_rank, 0);
 				for (int i = 0; i < nb_dpus_in_rank; i++) {
 					uids[i] = DPU_UID(rank_id, i);
 				}
-				_pim_rankset.send_data_to_rank_sync(rank_id, "_dpu_uid", 0, uids, sizeof(size_t));
+				_pim_rankset.send_data_to_rank_sync(rank_id, "dpu_uid", 0, uids, sizeof(size_t));
 
 				_pim_rankset.launch_rank_sync(rank_id);
 			}, true);
@@ -176,14 +176,14 @@ class PimBloomFilter : public BulkBloomFilter {
 
 		std::vector<bool> contains_bulk(const std::vector<uint64_t>& items) override {
 			(void) items; // Not implemented yet
-			return std::vector<bool>(); // TODO
+			return std::vector<bool>(items.size(), false); // FIXME
 		}
 
 		size_t get_weight() override {
 
 			// Launch in parallel all ranks
 			_pim_rankset.for_each_rank([this](size_t rank_id) {
-				broadcast_mode_async(rank_id, BloomMode::BLOOM_WEIGHT);
+				broadcast_mode_async(rank_id, WEIGHT_TKN);
 				_pim_rankset.launch_rank_async(rank_id);
 			}, true);
 
@@ -238,12 +238,18 @@ class PimBloomFilter : public BulkBloomFilter {
 			return std::string(DPU_BINARIES_DIR) + "/bloom_filters_dpu";
 		}
 
-		void broadcast_mode_sync(size_t rank_id, BloomMode mode) {
-			_pim_rankset.broadcast_to_rank_sync(rank_id, "_mode", 0, &mode, sizeof(mode));
+		// To have mode values stored somewhere for async transfer
+		BloomMode INIT_TKN = BloomMode::BLOOM_INIT;
+		BloomMode INSERT_TKN = BloomMode::BLOOM_INSERT;
+		BloomMode LOOKUP_TKN = BloomMode::BLOOM_LOOKUP;
+		BloomMode WEIGHT_TKN = BloomMode::BLOOM_WEIGHT;
+
+		void broadcast_mode_sync(size_t rank_id, BloomMode& mode) {
+			_pim_rankset.broadcast_to_rank_sync(rank_id, "mode", 0, &mode, sizeof(mode));
 		}
 
-		void broadcast_mode_async(size_t rank_id, BloomMode mode) {
-			_pim_rankset.broadcast_to_rank_async(rank_id, "_mode", 0, &mode, sizeof(mode));
+		void broadcast_mode_async(size_t rank_id, BloomMode& mode) {
+			_pim_rankset.broadcast_to_rank_async(rank_id, "mode", 0, &mode, sizeof(mode));
 		}
 
 		void _insert_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t &bucket_length, LaunchStatistics& statistics) {
@@ -251,7 +257,7 @@ class PimBloomFilter : public BulkBloomFilter {
 			_pim_rankset.lock_rank(rank_id); // Lock so that other workers don't stack async calls in-between
 
 			_pim_rankset.send_data_to_rank_async<uint64_t>(rank_id, "items", 0, buckets, bucket_length);
-			broadcast_mode_async(rank_id, BloomMode::BLOOM_INSERT);
+			broadcast_mode_async(rank_id, INSERT_TKN);
 
 			// Error checking for number of items
 			// uint64_t items_sent = 0;

@@ -43,24 +43,21 @@ int main(int argc, char** argv) {
     spdlog::set_level(spdlog::level::info);
 
 	std::cout << "> Creating filter..." << std::endl;
-	PimBloomFilter<HashPimItemDispatcher> *bloom_filter;
-    TIMEIT(bloom_filter = new PimBloomFilter<HashPimItemDispatcher>(bloom_size2, nb_hash, NB_THREADS, nb_ranks, dpu_profile));
+	std::unique_ptr<IBloomFilter> bloom_filter;
+    TIMEIT(bloom_filter = std::make_unique<PimBloomFilter<HashPimItemDispatcher>>(bloom_size2, nb_hash, NB_THREADS, nb_ranks, dpu_profile));
 
     std::cout << "> Inserting many items..." << std::endl;
 	TIMEIT(bloom_filter->insert_bulk(items));
 
-    // std::cout << "> Computing weight..." << std::endl;
-    // size_t weight;
-    // TIMEIT(weight = bloom_filter->get_weight());
-    // std::cout << "Weight is " << weight << std::endl;
+    std::cout << "> Computing weight..." << std::endl;
+    size_t weight;
+    TIMEIT(weight = bloom_filter->get_weight());
+    std::cout << "Weight is " << weight << std::endl;
 
     // std::cout << "> Querying all inserted items in a random order..." << std::endl;
 	// auto rng = std::default_random_engine{};
 	// std::shuffle(std::begin(items), std::end(items), rng);
 	// TIMEIT(bloom_filter->contains_bulk(items));
-
-    std::cout << "> Cleaning filter..." << std::endl;
-	delete bloom_filter;
 
     std::cout << "> The end." << std::endl;
 

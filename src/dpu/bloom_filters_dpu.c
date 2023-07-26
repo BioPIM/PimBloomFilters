@@ -14,18 +14,17 @@
 
 #define MAX_BLOOM_DPU_SIZE (1 << MAX_BLOOM_DPU_SIZE2)
 
-#define INIT_BLOOM_CACHE_SIZE 2048
-#define ITEMS_CACHE_SIZE 128
+#define CACHE8_SIZE 2048
+#define CACHE64_SIZE (CACHE8_SIZE >> 3)
 
 BARRIER_INIT(reduce_all_barrier, NR_TASKLETS);
 
 // Input from host
 // WRAM
-__host uint64_t _dpu_size2;
-__host enum BloomMode _mode;
-__host uint64_t _nb_hash;
-
-__host uint64_t _dpu_uid;
+__host uint64_t dpu_size2;
+__host enum BloomMode mode;
+__host uint64_t nb_hash;
+__host uint64_t dpu_uid;
 // MRAM
 __mram_noinit uint64_t items[MAX_NB_ITEMS_PER_DPU + 1];
 
@@ -33,8 +32,8 @@ __mram_noinit uint64_t items[MAX_NB_ITEMS_PER_DPU + 1];
 // WRAM
 uint64_t _dpu_size_reduced;
 // MRAM
-__mram_noinit uint8_t blooma[MAX_BLOOM_DPU_SIZE * NR_TASKLETS];
-uint64_t t_results[NR_TASKLETS];
+__mram_noinit uint8_t _bloom_data[MAX_BLOOM_DPU_SIZE * NR_TASKLETS];
+uint64_t _tasklet_results[NR_TASKLETS];
 
 // Output to host
 // WRAM - Performance
@@ -55,10 +54,10 @@ uint64_t simplehash16_64(uint64_t item, int idx) {
 	return res;
 }
 
-bool contains(uint64_t item, uint8_t __mram_ptr* the_blooma) {
-	for (size_t k = 0; k < _nb_hash; k++) {
+bool contains(uint64_t item, uint8_t __mram_ptr* data) {
+	for (size_t k = 0; k < nb_hash; k++) {
 		uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
-		if ((the_blooma[h0 >> 3] & bit_mask[h0 & 7]) == 0) {  return false; }
+		if ((data[h0 >> 3] & bit_mask[h0 & 7]) == 0) {  return false; }
 	}
 	return true;
 }
@@ -68,7 +67,7 @@ void reduce_all_results() {
 	if (me() == 0) {
 		result = 0;
 		for (size_t t = 0; t < NR_TASKLETS; t++) {
-			result += t_results[t];
+			result += _tasklet_results[t];
 		}
 	}
 }
@@ -79,121 +78,107 @@ void reduce_all_results() {
 
 int main() {
 
-	uint8_t __mram_ptr* t_blooma = &blooma[MAX_BLOOM_DPU_SIZE * me()];
+	uint8_t __mram_ptr* _bloom_tasklet_data = &_bloom_data[MAX_BLOOM_DPU_SIZE * me()];
+	size_t _bloom_nb_bytes = ((1UL << dpu_size2) >> 3UL);
+
+	__dma_aligned uint8_t cache8[CACHE8_SIZE];
+	uint64_t* cache64 = (uint64_t*) cache8;
 
 	perfcounter_config(COUNT_CYCLES, true);
 
-	// dpu_printf_0("Mode is %d\n", _mode);
+	dpu_printf_0("Mode is %d\n", mode);
 
-	__dma_aligned uint8_t bloom_cache[INIT_BLOOM_CACHE_SIZE];
-	uint64_t* items_cache = (uint64_t*) bloom_cache;
+	if (mode == BLOOM_INIT) {
 
-	switch (_mode) {
+		// Basic version: memset in mram, a bit slow
+		// memset(bloom_data, (uint8_t) 0, _bloom_nb_bytes * sizeof(uint8_t));
 
-		case BLOOM_INIT: {
-
-			// Basic version: memset in mram, a bit slow
-			// memset(t_blooma, 0, ((1 << _dpu_size2) >> 3) * sizeof(unsigned char));
-
-			// Better version: use a cache filled with zeros in wram
-			uint64_t total_size = ((1 << _dpu_size2) >> 3);
-			memset(bloom_cache, 0, INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
-			for (int i = 0; i < total_size; i += INIT_BLOOM_CACHE_SIZE) {
-				if ((i + INIT_BLOOM_CACHE_SIZE) >= total_size) {
-					mram_write(bloom_cache, &t_blooma[i], CEIL8(total_size - i) * sizeof(unsigned char));
-				} else {
-					mram_write(bloom_cache, &t_blooma[i], INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
-				}
-			}
-			
-			if (me() == 0) {
-				// dpu_printf("Filter size2 = %lu\n", _dpu_size2);
-				_dpu_size_reduced = (1 << _dpu_size2) - 1;
-			}
-			// dpu_printf("[%02d] My Bloom start adress is %p\n", me(), t_blooma);
-
-			break;
-		
-		} case BLOOM_WEIGHT: {
-
-			t_results[me()] = 0;
-			if (_dpu_size2 < 3) {
-				mram_read(t_blooma, bloom_cache, 8 * sizeof(unsigned char));
-				t_results[me()] += __builtin_popcount(bloom_cache[0] & ((1 << (_dpu_size2 + 1)) - 1));
+		// Better version: use a cache filled with zeros in wram
+		memset(cache8, (uint8_t) 0, CACHE8_SIZE * sizeof(uint8_t));
+		for (size_t i = 0; i < _bloom_nb_bytes; i += CACHE8_SIZE) {
+			if ((i + CACHE8_SIZE) >= _bloom_nb_bytes) {
+				mram_write(cache8, &_bloom_tasklet_data[i], CEIL8(_bloom_nb_bytes - i) * sizeof(uint8_t));
 			} else {
-				uint64_t total_size = ((1 << _dpu_size2) >> 3);
-				for (int i = 0; i < total_size; i += INIT_BLOOM_CACHE_SIZE) {
-					mram_read(&t_blooma[i], bloom_cache, INIT_BLOOM_CACHE_SIZE * sizeof(unsigned char));
-					for (int k = 0; (k < INIT_BLOOM_CACHE_SIZE) & ((i + k) < total_size); k++) {
-						t_results[me()] += __builtin_popcount(bloom_cache[k]);
-					}
-				}
+				mram_write(cache8, &_bloom_tasklet_data[i], CACHE8_SIZE * sizeof(uint8_t));
 			}
-			reduce_all_results();
-			break;
-		
-		} case BLOOM_INSERT: {
-
-			int t_items_cnt = 0;
-			uint64_t nb_items = 0;
-			
-			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
-			nb_items = items_cache[0];
-			
-			dpu_printf_0("[=>%lu: We have %lu items\n", _dpu_uid, items[0]);
-			// dpu_printf_0("We have %lu items\n", nb_items);
-			if (nb_items > MAX_NB_ITEMS_PER_DPU) {
-				halt(); // This should not happen, transfer issue
-			}
-			
-			int cache_idx = 1;
-			for (int i = 0; i < nb_items; i++) {
-				if (cache_idx == ITEMS_CACHE_SIZE) {
-					mram_read(&items[i + 1], items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
-					cache_idx = 0;
-				}
-				uint64_t item = items_cache[cache_idx];
-				if ((item & 15) == me()) {
-					for (size_t k = 0; k < _nb_hash; k++) {
-						uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
-						t_blooma[h0 >> 3] |= bit_mask[h0 & 7];
-						// mram_update_byte_atomic(&t_blooma[me()][h0 >> 3], insert_atomic, bit_mask[h0 & 7]); // Each tasklet has its own filter, no need to sync
-					}
-					t_items_cnt++;
-				}
-				cache_idx++;
-			}
-			// dpu_printf_me("I have %d items\n", t_items_cnt);
-			break;
-		
-		} case BLOOM_LOOKUP: {
-
-			int t_items_cnt = 0;
-			
-			t_results[me()] = 0;
-			mram_read(items, items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
-			uint64_t nb_items = items_cache[0];
-			dpu_printf_0("We have %lu items\n", nb_items);
-			int cache_idx = 1;
-			for (int i = 0; i < nb_items; i++) {
-				if (cache_idx == ITEMS_CACHE_SIZE) {
-					mram_read(&items[i + 1], items_cache, ITEMS_CACHE_SIZE * sizeof(uint64_t));
-					cache_idx = 0;
-				}
-				uint64_t item = items_cache[cache_idx];
-				if ((item & 15) == me()) {
-					bool result = contains(item, t_blooma);
-					t_results[me()] += result;
-					// dpu_printf("%d", result);
-					t_items_cnt++;
-				}
-				cache_idx++;
-			}
-			dpu_printf_me("I have %d items\n", t_items_cnt);
-			reduce_all_results();
-			break;
-		
 		}
+		
+		if (me() == 0) {
+			dpu_printf("Filter size2 = %lu\n", dpu_size2);
+			_dpu_size_reduced = (1 << dpu_size2) - 1;
+		}
+
+	} else if (mode == BLOOM_WEIGHT) {
+		
+		dpu_printf("Compute weight\n");
+		_tasklet_results[me()] = 0;
+		if (dpu_size2 < 3) {
+			mram_read(_bloom_tasklet_data, cache8, 8 * sizeof(uint8_t));
+			_tasklet_results[me()] += __builtin_popcount(cache8[0] & ((1 << (dpu_size2 + 1)) - 1));
+		} else {
+			for (size_t i = 0; i < _bloom_nb_bytes; i += CACHE8_SIZE) {
+				mram_read(&_bloom_tasklet_data[i], cache8, CACHE8_SIZE * sizeof(uint8_t));
+				for (size_t k = 0; (k < CACHE8_SIZE) & ((i + k) < _bloom_nb_bytes); k++) {
+					_tasklet_results[me()] += __builtin_popcount(cache8[k]);
+				}
+			}
+		}
+		reduce_all_results();
+		
+	} else if (mode == BLOOM_INSERT) {
+			
+		mram_read(items, cache64, CACHE64_SIZE * sizeof(uint64_t));
+		uint64_t _nb_items = cache64[0];
+		
+		dpu_printf_0("We have %lu items\n", _nb_items);
+		if (_nb_items > MAX_NB_ITEMS_PER_DPU) {
+			halt(); // This should not happen, there is an error somewhere
+		}
+		
+		size_t cache_idx = 1;
+		for (size_t i = 0; i < _nb_items; i++) {
+			if (cache_idx == CACHE64_SIZE) {
+				mram_read(&items[i + 1], cache64, CACHE64_SIZE * sizeof(uint64_t));
+				cache_idx = 0;
+			}
+			uint64_t item = cache64[cache_idx];
+			if ((item & 15) == me()) {
+				for (size_t k = 0; k < nb_hash; k++) {
+					uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
+					_bloom_tasklet_data[h0 >> 3] |= bit_mask[h0 & 7];
+					// mram_update_byte_atomic(&_bloom_tasklet_data[me()][h0 >> 3], insert_atomic, bit_mask[h0 & 7]); // Each tasklet has its own filter, no need to sync
+				}
+			}
+			cache_idx++;
+		}
+		
+	} else if (mode == BLOOM_LOOKUP) {
+
+		_tasklet_results[me()] = 0;
+
+		mram_read(items, cache64, CACHE64_SIZE * sizeof(uint64_t));
+		uint64_t _nb_items = cache64[0];
+		
+		// dpu_printf_0("We have %lu items\n", _nb_items);
+		if (_nb_items > MAX_NB_ITEMS_PER_DPU) {
+			halt(); // This should not happen, there is an error somewhere
+		}
+		
+		size_t cache_idx = 1;
+		for (size_t i = 0; i < _nb_items; i++) {
+			if (cache_idx == CACHE64_SIZE) {
+				mram_read(&items[i + 1], cache64, CACHE64_SIZE * sizeof(uint64_t));
+				cache_idx = 0;
+			}
+			uint64_t item = cache64[cache_idx];
+			if ((item & 15) == me()) {
+				bool result = contains(item, _bloom_tasklet_data);
+				_tasklet_results[me()] += result;
+			}
+			cache_idx++;
+		}
+		reduce_all_results();
+		
 	}
 
     nb_cycles = perfcounter_get();

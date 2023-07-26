@@ -69,6 +69,8 @@ class IBloomFilter {
 
         size_t _get_nb_threads() { return _nb_threads; }
         size_t _get_size() { return _size; }
+        size_t _get_size_reduced() { return _size_reduced; }
+        size_t _get_size2() { return _size2; }
         uint8_t _get_bit_mask(size_t idx) { return _bit_mask[idx]; }
 
     private:
@@ -102,7 +104,7 @@ class BulkBloomFilter : public IBloomFilter {
 
     public:
 
-        BulkBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : IBloomFilter(size2, nb_hash, nb_threads) {};
+        BulkBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : IBloomFilter(size2, nb_hash, nb_threads) {}
 
         void insert(const uint64_t& item) override {
             const auto items = std::vector<uint64_t>{item};
@@ -122,7 +124,7 @@ class IterativeBloomFilter : public IBloomFilter {
     
     public:
 
-        IterativeBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : IBloomFilter(size2, nb_hash, nb_threads) {};
+        IterativeBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : IBloomFilter(size2, nb_hash, nb_threads) {}
 
         void insert_bulk(const std::vector<uint64_t>& items) override {
             #pragma omp parallel for num_threads(_get_nb_threads())
@@ -132,10 +134,10 @@ class IterativeBloomFilter : public IBloomFilter {
         }
 
         std::vector<bool> contains_bulk(const std::vector<uint64_t>& items) override {
-            auto result =  std::vector<bool>();
-            result.reserve(items.size());
-            for (auto item : items) {
-                result.push_back(contains(item));
+            auto result =  std::vector<bool>(items.size(), false);
+            #pragma omp parallel for num_threads(_get_nb_threads())
+            for (size_t i = 0; i < items.size(); i++) {
+                result[i] = contains(items[i]);
             }
             return result;
         }
@@ -148,23 +150,103 @@ class BucketIterativeBloomFilter : public IBloomFilter {
 
     public:
 
-        BucketIterativeBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : IBloomFilter(size2, nb_hash, nb_threads) {};
+        BucketIterativeBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1, size_t nb_buckets2 = 8) : IBloomFilter(size2, nb_hash, nb_threads),
+                _nb_buckets2(nb_buckets2), _nb_buckets(1LU << nb_buckets2), _nb_buckets_reduced(_nb_buckets - 1) {}
 
-        void insert_bulk(const std::vector<uint64_t>& items) override { // TODO
-            #pragma omp parallel for num_threads(_get_nb_threads())
-            for (size_t i = 0; i < items.size(); i++) {
-                insert(items[i]);
+        void insert_bulk(const std::vector<uint64_t>& items) override {
+
+            // Use a matrix of buckets
+            std::vector<std::vector<uint64_t>> buckets(_get_nb_threads() * _nb_buckets);
+
+            // Reserve space to accelerate a little
+            size_t estimated_space = items.size() / buckets.size();
+            for (auto bucket : buckets) {
+                bucket.reserve(estimated_space);
             }
+            
+            // Dispatch all items in the buckets
+            // Thread-split per line
+            size_t bucket_shift = _get_size2() - _nb_buckets2;
+            #pragma omp parallel for num_threads(_get_nb_threads())
+            for (size_t tid = 0; tid < _get_nb_threads(); tid++) {
+                size_t tid_offset = tid * _nb_buckets;
+                for (size_t i = tid; i < items.size(); i += _get_nb_threads()) {
+                    u_int64_t h = _hash_for_bucket(items[i]);
+                    buckets[((h >> bucket_shift) & _nb_buckets_reduced) + tid_offset].push_back(items[i]);
+                }
+            }
+            
+            // Write in the filter
+            // Thread-split per column
+            for (size_t round = 0; round < 2; round++) { // 2 rounds to ensure few sync wait with cache filter implementation
+                #pragma omp parallel for num_threads(_get_nb_threads())
+                for (size_t b = round; b < _nb_buckets; b += 2) {
+                    for (size_t tid = 0; tid < _get_nb_threads(); tid++) {
+                        for (auto item : buckets[b + tid * _nb_buckets]) {
+                            insert(item);
+                        }
+                    }
+                }
+            }
+
         }
 
         std::vector<bool> contains_bulk(const std::vector<uint64_t>& items) override {
-            auto result =  std::vector<bool>();
-            result.reserve(items.size());
-            for (auto item : items) {
-                result.push_back(contains(item));
+
+            // Use a matrix of buckets
+            std::vector<std::vector<std::pair<uint64_t, size_t>>> buckets(_get_nb_threads() * _nb_buckets);
+
+            // Reserve space to accelerate a little
+            size_t estimated_space = items.size() / buckets.size();
+            for (auto bucket : buckets) {
+                bucket.reserve(estimated_space);
             }
+            
+            // Dispatch all items in the buckets
+            // Thread-split per line
+            size_t bucket_shift = _get_size2() - _nb_buckets2;
+            #pragma omp parallel for num_threads(_get_nb_threads())
+            for (size_t tid = 0; tid < _get_nb_threads(); tid++) {
+                size_t tid_offset = tid * _nb_buckets;
+                for (size_t i = tid; i < items.size(); i += _get_nb_threads()) {
+                    u_int64_t h = _hash_for_bucket(items[i]);
+                    buckets[((h >> bucket_shift) & _nb_buckets_reduced) + tid_offset].push_back(std::pair<uint64_t, size_t>(items[i], i));
+                }
+            }
+
+            // Editing a vector of bool is not thread-safe even if accessing different cells, so using an intermediate vector
+            auto int_result =  std::vector<int>(items.size(), false);
+            
+            // Write in the filter
+            // Thread-split per column
+            #pragma omp parallel for num_threads(_get_nb_threads())
+            for (size_t b = 0; b < _nb_buckets; b++) {
+                for (size_t tid = 0; tid < _get_nb_threads(); tid++) {
+                    for (auto pair : buckets[b + tid * _nb_buckets]) {
+                        int_result[pair.second] = contains(pair.first);
+                    }
+                }
+            }
+
+            // Formatting back into a vector of bool
+            auto result =  std::vector<bool>(int_result.size(), false);
+            for (size_t i = 0; i < int_result.size(); i++) {
+                result[i] = int_result[i];
+            }
+
             return result;
+            
         }
+    
+    protected:
+
+        virtual uint64_t _hash_for_bucket(const uint64_t& item) = 0;
+    
+    private:
+
+        size_t _nb_buckets2;
+        size_t _nb_buckets;
+        size_t _nb_buckets_reduced;
 
 };
 

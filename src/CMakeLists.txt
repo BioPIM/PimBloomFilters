@@ -26,13 +26,14 @@ add_library(${LIB_NAME} STATIC
     pim_rankset.cpp
     pim_bloom_filter.cpp
     standard_bloom_filter.cpp
+    bloom_filter_factory.cpp
 )
 
 target_compile_options(${LIB_NAME} PRIVATE -Wall -Wextra)
 if(FSANITIZE)
     target_compile_options(${LIB_NAME} PRIVATE -fsanitize=leak)
 endif(FSANITIZE)
-if (LOG_DPU)
+if (LOG_DPU) # FIXME: seems to be not working
     target_compile_definitions(${LIB_NAME} PRIVATE "LOG_DPU")
 endif(LOG_DPU)
 target_link_libraries(${LIB_NAME} PRIVATE OpenMP::OpenMP_CXX)

@@ -36,11 +36,11 @@ int main(int argc, char** argv) {
 
 	std::vector<uint64_t> items = get_seq_items(nb_items);
 
-    spdlog::set_level(spdlog::level::debug);
+    spdlog::set_level(spdlog::level::info);
 
 	std::cout << "> Creating filter..." << std::endl;
-	BasicBloomFilter *bloom_filter;
-    TIMEIT(bloom_filter = new BasicBloomFilter(bloom_size2, nb_hash, NB_THREADS));
+	std::unique_ptr<IBloomFilter> bloom_filter;
+    TIMEIT(bloom_filter = std::make_unique<SyncCacheBloomFilter>(bloom_size2, nb_hash, NB_THREADS));
 
     std::cout << "> Inserting many items..." << std::endl;
 	TIMEIT(bloom_filter->insert_bulk(items));
@@ -54,9 +54,6 @@ int main(int argc, char** argv) {
 	// auto rng = std::default_random_engine{};
 	// std::shuffle(std::begin(items), std::end(items), rng);
 	// TIMEIT(bloom_filter->contains_bulk(items));
-
-    std::cout << "> Cleaning filter..." << std::endl;
-	delete bloom_filter;
 
     std::cout << "> The end." << std::endl;
 

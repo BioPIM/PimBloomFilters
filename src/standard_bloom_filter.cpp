@@ -1,27 +1,26 @@
 # include "bloom_filter.hpp"
 
-class SyncBasicBloomFilter : public IterativeBloomFilter {
+class SyncBasicBloomFilter : public BucketIterativeBloomFilter {
     
     public:
 
-        SyncBasicBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : IterativeBloomFilter(size2, nb_hash, nb_threads),
-                _hash_functions(nb_hash), _nb_bits(_get_size() >> 3LU) {
+        SyncBasicBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : BucketIterativeBloomFilter(size2, nb_hash, nb_threads),
+                _hash_functions(nb_hash), _nb_bytes(_get_size() >> 3LU) {
 
-            _bloom_data.resize(_nb_bits, (uint8_t) 0);
-            _nb_bits--;
+            _bloom_data.resize(_nb_bytes, (uint8_t) 0);
 
         }
 
         void insert(const u_int64_t& item) override {
             for (size_t i = 0 ; i < get_nb_hash(); i++) {
-                u_int64_t h = _hash_functions(item, i) & _nb_bits;
+                u_int64_t h = _hash_functions(item, i) & _get_size_reduced();
                 __sync_fetch_and_or(_bloom_data.data() + (h >> 3LU), _get_bit_mask(h & 7LU));
             }
         }
 
         bool contains(const u_int64_t& item) override {
             for (size_t i = 0 ; i < get_nb_hash(); i++) {
-                u_int64_t h = _hash_functions(item, i) & _nb_bits;
+                u_int64_t h = _hash_functions(item, i) & _get_size_reduced();
 				if ((_bloom_data[h >> 3LU] & _get_bit_mask(h & 7LU)) == 0) {
                     return false;
                 }
@@ -43,15 +42,18 @@ class SyncBasicBloomFilter : public IterativeBloomFilter {
     
     protected:
 
+        uint64_t _hash_for_bucket(const uint64_t& item) {
+            return _hash_functions(item, 0) & _get_size_reduced();
+        }
+
         BloomHashFunctions _get_hash_functions() { return _hash_functions; }
         std::vector<uint8_t>& _get_data() { return _bloom_data; }
-        size_t _get_nb_bits() { return _nb_bits; }
 
     private:
 
         std::vector<uint8_t> _bloom_data;
         BloomHashFunctions _hash_functions;
-        size_t _nb_bits;
+        size_t _nb_bytes;
 
 };
 
@@ -64,36 +66,35 @@ class BasicBloomFilter : public SyncBasicBloomFilter {
             if (_get_nb_threads() > 1) {
                 throw std::invalid_argument(std::string("Error: this class cannot be used with more than 1 thread, use the synchronized equivalent SyncBasicBloomFilter instead"));
             }
-            
+
         }
 
         void insert(const u_int64_t& item) override {
             for (size_t i = 0 ; i < get_nb_hash(); i++) {
-                u_int64_t h = _get_hash_functions()(item, i) & _get_nb_bits();
+                u_int64_t h = _get_hash_functions()(item, i) & _get_size_reduced();
                 _get_data()[h >> 3LU] |= _get_bit_mask(h & 7LU);
             }
         }
 
 };
 
-class SyncCacheBloomFilter : public IterativeBloomFilter {
+class SyncCacheBloomFilter : public BucketIterativeBloomFilter {
     
     public:
 
-        SyncCacheBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1, size_t block_size2 = 6) : IterativeBloomFilter(size2, nb_hash, nb_threads),
-                _hash_functions(nb_hash), _nb_bits(_get_size()), _nb_bits_extended(_nb_bits + (((1LU << block_size2)) >> 3LU)), _block_mask((1LU << block_size2) - 1) {
+        SyncCacheBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1, size_t block_size2 = 6) : BucketIterativeBloomFilter(size2, nb_hash, nb_threads),
+                _hash_functions(nb_hash), _nb_bytes(_get_size()), _nb_bytes_extended(_nb_bytes + (((1LU << block_size2)) >> 3LU)), _block_mask((1LU << block_size2) - 1) {
             
-            _bloom_data.resize(_nb_bits_extended, (uint8_t) 0);
-            _nb_bits--;
+            _bloom_data.resize(_nb_bytes_extended, (uint8_t) 0);
 
         }
 
         void insert(const u_int64_t& item) override {
-            _insert(item, _hash_functions(item, 0) & _nb_bits);
+            _insert(item, _hash_functions(item, 0) & _get_size_reduced());
         }
 
         bool contains(const u_int64_t& item) override {
-            return _contains(item, _hash_functions(item, 0) & _nb_bits);
+            return _contains(item, _hash_functions(item, 0) & _get_size_reduced());
         }
 
         size_t get_weight() override {
@@ -109,6 +110,10 @@ class SyncCacheBloomFilter : public IterativeBloomFilter {
         }
     
     protected:
+
+        uint64_t _hash_for_bucket(const uint64_t& item) {
+            return _hash_functions(item, 0) & _get_size_reduced();
+        }
 
         virtual void _insert(const u_int64_t& item, const u_int64_t& h0) {
             __sync_fetch_and_or(_bloom_data.data() + (h0 >> 3LU), _get_bit_mask(h0 & 7LU));
@@ -133,15 +138,14 @@ class SyncCacheBloomFilter : public IterativeBloomFilter {
 
         BloomHashFunctions _get_hash_functions() { return _hash_functions; }
         std::vector<uint8_t>& _get_data() { return _bloom_data; }
-        size_t _get_nb_bits() { return _nb_bits; }
         size_t _get_block_mask() { return _block_mask; }
 
     private:
 
         std::vector<uint8_t> _bloom_data;
         BloomHashFunctions _hash_functions;
-        size_t _nb_bits;
-        size_t _nb_bits_extended;
+        size_t _nb_bytes;
+        size_t _nb_bytes_extended;
         size_t _block_mask;
 
 };

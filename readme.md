@@ -12,8 +12,8 @@ make -j
 ## How to run
 
 ```bash
-./src/unit_test1 # Unit tests for PIM filter
-./src/unit_test2 # Unit tests for standard filters (basic, cache and sync variants)
-./src/benchmark1 -h # Benchmarks for PIM filter
-./src/benchmark2 -h # Benchmarks for sync-cache filter
+./tests/unit_test1 # Unit tests for PIM filter
+./tests/unit_test2 # Unit tests for standard filters (basic, cache and sync variants)
+./benchmarks/benchmark1 -h # Benchmark for PIM filter
+./benchmarks/benchmark2 -h # Benchmark for sync-cache filter
 ```

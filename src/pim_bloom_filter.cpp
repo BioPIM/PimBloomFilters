@@ -104,7 +104,7 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			const size_t nb_items = items.size();
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
-			const size_t nb_workers = 8;
+			const size_t nb_workers = 1;
 
 			const uint64_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU / nb_ranks;
 			const size_t bucket_size = max_nb_items_per_bucket + 1;
@@ -122,6 +122,7 @@ class PimBloomFilter : public BulkBloomFilter {
 
 				int worker_id = omp_get_thread_num();
 				auto rank_buckets = std::vector<std::vector<std::vector<uint64_t>>>(nb_ranks);
+				auto &done_container = done_containers[worker_id];
 				
 				// Consider a partition of the items
 				for (size_t i = worker_id; i < nb_items; i += nb_workers) {
@@ -140,13 +141,13 @@ class PimBloomFilter : public BulkBloomFilter {
 						}
 					}
 					
-					std::vector<uint64_t> &bucket = buckets[bucket_idx];
+					auto &bucket = buckets[bucket_idx];
 					bucket[0]++;
 					bucket[bucket[0]] = item;
 
 					if ((bucket[0] >= max_nb_items_per_bucket)) {
-						done_containers[worker_id].push_back(std::move(buckets));
-						_insert_launch(rank_id, done_containers[worker_id].back(), bucket_length, statistics);
+						done_container.push_back(std::move(buckets));
+						_insert_launch(rank_id, done_container.back(), bucket_length, statistics);
 						rank_buckets[rank_id] = std::vector<std::vector<uint64_t>>();
 					}
 					
@@ -156,8 +157,8 @@ class PimBloomFilter : public BulkBloomFilter {
 				for (size_t rank_id = 0; rank_id < nb_ranks; rank_id++) {
 					auto &buckets = rank_buckets[rank_id];
 					if (!buckets.empty()) {
-						done_containers[worker_id].push_back(std::move(buckets));
-						_insert_launch(rank_id, done_containers[worker_id].back(), bucket_length, statistics);
+						done_container.push_back(std::move(buckets));
+						_insert_launch(rank_id, done_container.back(), bucket_length, statistics);
 					}
 				}
 
@@ -175,8 +176,105 @@ class PimBloomFilter : public BulkBloomFilter {
 		}
 
 		std::vector<bool> contains_bulk(const std::vector<uint64_t>& items) override {
-			(void) items; // Not implemented yet
-			return std::vector<bool>(items.size(), false); // FIXME
+
+			const size_t nb_items = items.size();
+			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
+			const size_t nb_workers = 8;
+
+			const uint64_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU / nb_ranks;
+			const size_t bucket_size = max_nb_items_per_bucket + 1;
+			const size_t bucket_length = sizeof(uint64_t) * bucket_size;
+
+			auto statistics = LaunchStatistics();
+
+			auto done_containers = std::vector<std::vector<std::vector<std::vector<uint64_t>>>>(nb_workers);
+			auto indexes_containers = std::vector<std::vector<std::vector<std::vector<size_t>>>>(nb_workers);
+			for (auto done_container : done_containers) {
+				size_t estimated_size = nb_items / max_nb_items_per_bucket / nb_workers;
+				done_container.reserve(estimated_size);
+				indexes_containers.reserve(estimated_size);
+			}
+
+			// Editing a vector of bool is not thread-safe even if accessing different cells, so using an intermediate vector
+			auto int_result = std::vector<int>(items.size(), false);
+
+			#pragma omp parallel num_threads(nb_workers)
+			{
+
+				int worker_id = omp_get_thread_num();
+				auto rank_buckets = std::vector<std::vector<std::vector<uint64_t>>>(nb_ranks);
+				auto rank_indexes_buckets = std::vector<std::vector<std::vector<size_t>>>(nb_ranks);
+				auto &done_container = done_containers[worker_id];
+				auto &indexes_container = indexes_containers[worker_id];
+				
+				// Consider a partition of the items
+				for (size_t i = worker_id; i < nb_items; i += nb_workers) {
+					uint64_t item = items[i];
+					auto dispatch_data = _item_dispatcher.dispatch(item);
+					size_t rank_id = dispatch_data.get_rank_id();
+					size_t bucket_idx = dispatch_data.get_dpu_id();
+					size_t nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
+
+					auto &buckets = rank_buckets[rank_id];
+					auto &indexes_buckets = rank_indexes_buckets[rank_id];
+					
+					if (buckets.empty()) {
+						buckets.resize(nb_dpus_in_rank);
+						indexes_buckets.resize(nb_dpus_in_rank);
+						for (auto &bucket : buckets) {
+							bucket.resize(bucket_size, 0);
+						}
+						for (auto &bucket : indexes_buckets) {
+							bucket.resize(bucket_size, 0);
+						}
+					}
+					
+					auto &bucket = buckets[bucket_idx];
+					auto &indexes_bucket = indexes_buckets[bucket_idx];
+					bucket[0]++;
+					indexes_bucket[0]++;
+					bucket[bucket[0]] = item;
+					indexes_bucket[bucket[0]] = i;
+
+					if ((bucket[0] >= max_nb_items_per_bucket)) {
+						done_container.push_back(std::move(buckets));
+						indexes_container.push_back(std::move(indexes_buckets));
+						_contains_launch(rank_id, done_container.back(), bucket_length, int_result, indexes_container.back(), statistics);
+						rank_buckets[rank_id] = std::vector<std::vector<uint64_t>>();
+						rank_indexes_buckets[rank_id] = std::vector<std::vector<size_t>>();
+					}
+					
+				}
+				
+				// Launch remaining buckets that are not full
+				for (size_t rank_id = 0; rank_id < nb_ranks; rank_id++) {
+					auto &buckets = rank_buckets[rank_id];
+					auto &indexes_buckets = rank_indexes_buckets[rank_id];
+					if (!buckets.empty()) {
+						done_container.push_back(std::move(buckets));
+						indexes_container.push_back(std::move(indexes_buckets));
+						_contains_launch(rank_id, done_container.back(), bucket_length, int_result, indexes_container.back(), statistics);
+					}
+				}
+
+				// Call to see on trace when workers are done
+				_worker_done();
+				
+			}
+			
+			_pim_rankset.wait_all_ranks_done();
+
+			if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {
+				statistics.print();
+			}
+
+			// Formatting back into a vector of bool
+            auto result =  std::vector<bool>(int_result.size(), false);
+            for (size_t i = 0; i < int_result.size(); i++) {
+                result[i] = int_result[i];
+            }
+
+            return result;
 		}
 
 		size_t get_weight() override {
@@ -252,7 +350,7 @@ class PimBloomFilter : public BulkBloomFilter {
 			_pim_rankset.broadcast_to_rank_async(rank_id, "mode", 0, &mode, sizeof(mode));
 		}
 
-		void _insert_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t &bucket_length, LaunchStatistics& statistics) {
+		void _insert_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t& bucket_length, LaunchStatistics& statistics) {
 
 			_pim_rankset.lock_rank(rank_id); // Lock so that other workers don't stack async calls in-between
 
@@ -267,7 +365,7 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			// _pim_rankset.add_callback_async(rank_id, &_pim_rankset, [items_sent](size_t rank_id, void* arg) {
 			// 	auto rankset = static_cast<PimRankSet*>(arg);
-			// 	uint64_t items_received = rankset->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
+			// 	auto items_received = rankset->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
 			// 	if (items_sent != items_received) {
 			// 		spdlog::error("Rank {}: DPUs received {} items instead of {} (diff = {})", rank_id, items_received, items_sent, (items_received - items_sent));
 			// 	} else {
@@ -277,6 +375,45 @@ class PimBloomFilter : public BulkBloomFilter {
 			// ----------------- //
 
 			_pim_rankset.launch_rank_async(rank_id);
+
+			_pim_rankset.unlock_rank(rank_id);
+
+			spdlog::debug("Stacked calls to launch rank {}", rank_id);
+
+			if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {
+				uint64_t items_sent = 0;
+				for (auto &bucket : buckets) {
+					items_sent += bucket[0];
+				}
+				statistics.incr_rounds(items_sent);
+			}
+
+		}
+
+		void _contains_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t& bucket_length, std::vector<int>& lookup_results, std::vector<std::vector<size_t>>& indexes_buckets, LaunchStatistics& statistics) {
+
+			_pim_rankset.lock_rank(rank_id); // Lock so that other workers don't stack async calls in-between
+
+			_pim_rankset.send_data_to_rank_async<uint64_t>(rank_id, "items", 0, buckets, bucket_length);
+			broadcast_mode_async(rank_id, LOOKUP_TKN);
+
+			_pim_rankset.launch_rank_async(rank_id);
+			
+			// Get results
+			// NB: indexes_buckets doesn't work with reference capture for some reason
+			_pim_rankset.add_callback_async(rank_id, &_pim_rankset, [indexes_buckets, bucket_length, &lookup_results](size_t rank_id, void* arg) {
+				auto rankset = static_cast<PimRankSet*>(arg);
+				auto rank_results = rankset->get_vec_data_from_rank_sync<uint64_t>(rank_id, "items", 0, bucket_length);
+				// spdlog::info("Callback buckets is at {}, size {}", fmt::ptr(&buckets), buckets.size());
+				for (size_t dpu_id = 0; dpu_id < indexes_buckets.size(); dpu_id++) {
+					auto &indexes_bucket = indexes_buckets[dpu_id];
+					auto &bucket_results = rank_results[dpu_id];
+					// spdlog::info("there1 {} {} {}", dpu_id, buckets.size(), fmt::ptr(&buckets));
+					for (size_t i = 1; i <= indexes_bucket[0]; i++) {
+						lookup_results[indexes_bucket[i]] = bucket_results[i];
+					}
+				}
+			});
 
 			_pim_rankset.unlock_rank(rank_id);
 

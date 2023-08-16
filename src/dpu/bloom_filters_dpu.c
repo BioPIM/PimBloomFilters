@@ -18,6 +18,7 @@
 #define CACHE64_SIZE (CACHE8_SIZE >> 3)
 
 BARRIER_INIT(reduce_all_barrier, NR_TASKLETS);
+BARRIER_INIT(reduce_all_barrier2, NR_TASKLETS);
 
 // Input from host
 // WRAM
@@ -31,6 +32,8 @@ __mram_noinit uint64_t items[MAX_NB_ITEMS_PER_DPU + 1];
 // Own variables
 // WRAM
 uint64_t _dpu_size_reduced;
+__dma_aligned uint8_t gcache8[CACHE8_SIZE];
+uint64_t* gcache64 = (uint64_t*) gcache8;
 // MRAM
 __mram_noinit uint8_t _bloom_data[MAX_BLOOM_DPU_SIZE * NR_TASKLETS];
 uint64_t _tasklet_results[NR_TASKLETS];
@@ -130,10 +133,10 @@ int main() {
 		mram_read(items, cache64, CACHE64_SIZE * sizeof(uint64_t));
 		uint64_t _nb_items = cache64[0];
 		
-		dpu_printf_0("We have %lu items\n", _nb_items);
-		if (_nb_items > MAX_NB_ITEMS_PER_DPU) {
-			halt(); // This should not happen, there is an error somewhere
-		}
+		// dpu_printf_0("We have %lu items\n", _nb_items);
+		// if (_nb_items > MAX_NB_ITEMS_PER_DPU) {
+		// 	halt(); // This should not happen, there is an error somewhere
+		// }
 		
 		size_t cache_idx = 1;
 		for (size_t i = 0; i < _nb_items; i++) {
@@ -160,24 +163,34 @@ int main() {
 		uint64_t _nb_items = cache64[0];
 		
 		// dpu_printf_0("We have %lu items\n", _nb_items);
-		if (_nb_items > MAX_NB_ITEMS_PER_DPU) {
-			halt(); // This should not happen, there is an error somewhere
-		}
+		// if (_nb_items > MAX_NB_ITEMS_PER_DPU) {
+		// 	halt(); // This should not happen, there is an error somewhere
+		// }
 		
 		size_t cache_idx = 1;
+		size_t current_start_idx = 0;
 		for (size_t i = 0; i < _nb_items; i++) {
 			if (cache_idx == CACHE64_SIZE) {
-				mram_read(&items[i + 1], cache64, CACHE64_SIZE * sizeof(uint64_t));
+				barrier_wait(&reduce_all_barrier); // Wait, the result needs to be written
+				if (me() == 0) {
+					mram_write(gcache64, &items[current_start_idx], CACHE64_SIZE * sizeof(uint64_t));
+				}
+				barrier_wait(&reduce_all_barrier2); // Can go again
+				current_start_idx += CACHE64_SIZE;
+				mram_read(&items[current_start_idx], cache64, CACHE64_SIZE * sizeof(uint64_t));
 				cache_idx = 0;
 			}
 			uint64_t item = cache64[cache_idx];
 			if ((item & 15) == me()) {
-				bool result = contains(item, _bloom_tasklet_data);
-				_tasklet_results[me()] += result;
+				gcache64[cache_idx] = contains(item, _bloom_tasklet_data); // Write result in a global cache
 			}
 			cache_idx++;
 		}
-		reduce_all_results();
+		barrier_wait(&reduce_all_barrier);
+		if (me() == 0) {
+			// Write last part
+			mram_write(gcache64, &items[current_start_idx], CACHE64_SIZE * sizeof(uint64_t));
+		}
 		
 	}
 

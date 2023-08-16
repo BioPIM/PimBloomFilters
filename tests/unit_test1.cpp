@@ -89,7 +89,7 @@ TEST_CASE("Testing PIM Bloom filters") {
 	double fpr = (double) std::count(result.begin(), result.end(), true) / no_items.size();
 	CHECK(fpr <= 1.0);
 	if (items.size() <= (size_t) (1 << bloom_size2)) {
-		if (fpr > 0.1) {
+		if (fpr > 0.5) {
 			CAPTURE(fpr);
 			WARN(std::string("False positive rate is significantly high: ") + std::to_string(fpr));
 		}

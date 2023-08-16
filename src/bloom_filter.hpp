@@ -215,7 +215,7 @@ class BucketIterativeBloomFilter : public IBloomFilter {
             }
 
             // Editing a vector of bool is not thread-safe even if accessing different cells, so using an intermediate vector
-            auto int_result =  std::vector<int>(items.size(), false);
+            auto int_result = std::vector<int>(items.size(), false);
             
             // Write in the filter
             // Thread-split per column

@@ -15,6 +15,8 @@ set(LIB_NAME "BloomFilters")
 # set(CMAKE_BUILD_TYPE Debug) 
 set(CMAKE_BUILD_TYPE Release)
 
+set(TASKLETS "16")
+
 option(LOG_DPU "Print log messages from DPUs")
 option(FSANITIZE "Compile with fsanitize=address flags")
 
@@ -29,6 +31,7 @@ string(REPLACE "\n" "" DPU_H_INCLUDE ${DPU_H_INCLUDE})
 include_directories(src thirdparty ${DPU_H_INCLUDE})
 get_filename_component(DPU_BINARIES_ABS_DIR ${CMAKE_CURRENT_BINARY_DIR}/src/dpu REALPATH)
 add_compile_definitions(DPU_BINARIES_DIR="${DPU_BINARIES_ABS_DIR}")
+add_compile_definitions(NR_TASKLETS=${TASKLETS})
 
 add_subdirectory(src)
 add_subdirectory(tests)

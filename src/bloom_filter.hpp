@@ -63,6 +63,10 @@ class IBloomFilter {
         /// @return vector representing the filter
         virtual const std::vector<uint8_t>& get_data() = 0;
 
+        /// @brief Set the data of the filter to load it back
+        /// @param data representation of the filter (must be obtained through get_data() to be valid)
+        virtual void set_data(const std::vector<uint8_t>& data) = 0;
+
         size_t get_nb_hash() { return _nb_hash; }
 
     protected:

@@ -105,4 +105,9 @@ TEST_CASE("Testing PIM Bloom filters") {
 	result = bloom_filter->contains_bulk(other_items);
 	CHECK(result[1] == true);
 
+	INFO("Getting data, loading it into a new filter and checking weight remains identical");
+	auto bloom_filter2 = std::make_unique<PimBloomFilter<HashPimItemDispatcher>>(bloom_size2, nb_hash, NB_THREADS, nb_ranks, DpuProfile::HARDWARE);
+	bloom_filter2->set_data(bloom_filter->get_data());
+	CHECK(bloom_filter->get_weight() == bloom_filter2->get_weight());
+
 }

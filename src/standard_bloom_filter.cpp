@@ -29,15 +29,24 @@ class SyncBasicBloomFilter : public BucketIterativeBloomFilter {
         }
 
         size_t get_weight() override {
+            auto thread_results = std::vector<size_t>(_get_nb_threads(), 0);
+            #pragma omp parallel for num_threads(_get_nb_threads())
+            for (size_t i = 0; i < _bloom_data.size(); i++) {
+                thread_results[omp_get_thread_num()] += __builtin_popcount(_bloom_data[i]);
+            }
             size_t result = 0;
-            for (auto data : _bloom_data) {
-                result += __builtin_popcount(data);
+            for (size_t tid = 0; tid < _get_nb_threads(); tid++) {
+                result += thread_results[tid];
             }
             return result;
         }
 
         const std::vector<uint8_t>& get_data() override {
             return _bloom_data;
+        }
+
+        void set_data(const std::vector<uint8_t>& data) override {
+            _bloom_data.assign(data.begin(), data.end());
         }
     
     protected:
@@ -98,15 +107,24 @@ class SyncCacheBloomFilter : public BucketIterativeBloomFilter {
         }
 
         size_t get_weight() override {
+            auto thread_results = std::vector<size_t>(_get_nb_threads(), 0);
+            #pragma omp parallel for num_threads(_get_nb_threads())
+            for (size_t i = 0; i < _bloom_data.size(); i++) {
+                thread_results[omp_get_thread_num()] += __builtin_popcount(_bloom_data[i]);
+            }
             size_t result = 0;
-            for (auto data : _bloom_data) {
-                result += __builtin_popcount(data);
+            for (size_t tid = 0; tid < _get_nb_threads(); tid++) {
+                result += thread_results[tid];
             }
             return result;
         }
 
         const std::vector<uint8_t>& get_data() override {
             return _bloom_data;
+        }
+
+        void set_data(const std::vector<uint8_t>& data) override {
+            _bloom_data.assign(data.begin(), data.end());
         }
     
     protected:

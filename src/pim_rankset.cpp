@@ -17,7 +17,7 @@
 
 // #define IGNORE_DPU_CALLS
 
-void _trace_rank_done() {}
+void __attribute__((noinline)) _trace_rank_done() {}
 
 enum DpuProfile {
     HARDWARE,

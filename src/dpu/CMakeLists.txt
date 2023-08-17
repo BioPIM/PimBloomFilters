@@ -1,6 +1,5 @@
 set(TARGETS bloom_filters_dpu)
 
-set(TASKLETS "16")
 set(STACK_SIZE "3072")
 
 foreach(TARGET ${TARGETS})

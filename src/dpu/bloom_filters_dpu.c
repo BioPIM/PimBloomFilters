@@ -12,8 +12,6 @@
 /*                                  Variables                                 */
 /* -------------------------------------------------------------------------- */
 
-#define MAX_BLOOM_DPU_SIZE (1 << MAX_BLOOM_DPU_SIZE2)
-
 #define CACHE8_SIZE 2048
 #define CACHE64_SIZE (CACHE8_SIZE >> 3)
 

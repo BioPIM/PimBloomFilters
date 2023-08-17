@@ -110,4 +110,9 @@ TEST_CASE("Testing PIM Bloom filters") {
 	bloom_filter2->set_data(bloom_filter->get_data());
 	CHECK(bloom_filter->get_weight() == bloom_filter2->get_weight());
 
+	INFO("Checking there is no false negatives in new filter...");
+	std::shuffle(std::begin(items), std::end(items), rng);
+	result = bloom_filter2->contains_bulk(items);
+	CHECK(static_cast<size_t>(std::count(result.begin(), result.end(), true)) == items.size());
+
 }

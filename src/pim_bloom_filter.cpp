@@ -300,13 +300,31 @@ class PimBloomFilter : public BulkBloomFilter {
 		}
 
 		const std::vector<uint8_t>& get_data() override {
+			_bloom_data.resize(0);
+			_bloom_data.reserve(MAX_BLOOM_DPU_SIZE * NR_TASKLETS * _pim_rankset.get_nb_dpu());
+			_pim_rankset.for_each_rank([this](size_t rank_id) {
+				auto rank_data = _pim_rankset.get_vec_data_from_rank_sync<uint8_t>(rank_id, "_bloom_data", 0, MAX_BLOOM_DPU_SIZE * NR_TASKLETS * sizeof(uint8_t));
+				for (auto &dpu_data : rank_data) {
+					std::move(dpu_data.begin(), dpu_data.end(), std::back_inserter(_bloom_data));
+				}
+			}, false); // Sequential because we need the order to be deterministic
 			return _bloom_data;
-			// TODO: not implemented yet
 		}
 
 		void set_data(const std::vector<uint8_t>& data) override {
-			(void) data;
-            // TODO: not implemented yet
+			size_t start_index = 0;
+			auto rank_buffers = std::vector<std::vector<std::vector<uint8_t>>>(_pim_rankset.get_nb_ranks());
+			_pim_rankset.for_each_rank([this, &start_index, &data, &rank_buffers](size_t rank_id) {
+				size_t nb_dpu_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
+				auto &buffers = rank_buffers[rank_id];
+				buffers.resize(nb_dpu_in_rank);
+				for (size_t dpu_id = 0; dpu_id < nb_dpu_in_rank; dpu_id++) {
+					buffers[dpu_id].assign(data.begin() + start_index, data.begin() + start_index + MAX_BLOOM_DPU_SIZE * NR_TASKLETS);
+					start_index += MAX_BLOOM_DPU_SIZE * NR_TASKLETS;
+				}
+				_pim_rankset.send_data_to_rank_async<uint8_t>(rank_id, "_bloom_data", 0, buffers , MAX_BLOOM_DPU_SIZE * NR_TASKLETS * sizeof(uint8_t));
+			}, false); // Sequential because we need to restore in the right order (but calls can be async)
+			_pim_rankset.wait_all_ranks_done();
         }
 
 	private:

@@ -217,7 +217,7 @@ public:
         struct dpu_set_t _it_dpu = dpu_set_t{};
 	    uint32_t _it_dpu_idx = 0;
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
-            buffer[_it_dpu_idx].reserve(length);
+            buffer[_it_dpu_idx].resize(length);
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, buffer[_it_dpu_idx].data()));
         }
         DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_FROM_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));

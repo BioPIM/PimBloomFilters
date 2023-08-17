@@ -4,7 +4,8 @@
 #define CEIL8(x) ((((x) + 7) >> 3) << 3)
 
 #define MAX_NB_ITEMS_PER_DPU (1UL << 12)
-#define MAX_BLOOM_DPU_SIZE2 20
+#define MAX_BLOOM_DPU_SIZE2 14
+#define MAX_BLOOM_DPU_SIZE (1 << MAX_BLOOM_DPU_SIZE2)
 
 enum BloomFunction {
     BLOOM_INIT = 0,

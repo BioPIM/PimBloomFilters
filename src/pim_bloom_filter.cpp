@@ -10,7 +10,7 @@
 
 #include"bloom_filter.hpp"
 
-void __attribute__((noinline)) _worker_done() {}
+void __attribute__((optimize(0))) _worker_done() {}
 
 /* -------------------------------------------------------------------------- */
 /*                              Item dispatchers                              */
@@ -300,6 +300,10 @@ class PimBloomFilter : public BulkBloomFilter {
 		}
 
 		const std::vector<uint8_t>& get_data() override {
+			// NB: for ease we get the whole buffer no matter the actual filter size
+			// because it would be a bit trickier to get only the relevant part used by each tasklet
+			// So the data returned takes (a lot) more storage than it could
+			// But works fine this way for now
 			_bloom_data.resize(0);
 			_bloom_data.reserve(MAX_BLOOM_DPU_SIZE * NR_TASKLETS * _pim_rankset.get_nb_dpu());
 			_pim_rankset.for_each_rank([this](size_t rank_id) {
@@ -323,7 +327,7 @@ class PimBloomFilter : public BulkBloomFilter {
 					start_index += MAX_BLOOM_DPU_SIZE * NR_TASKLETS;
 				}
 				_pim_rankset.send_data_to_rank_async<uint8_t>(rank_id, "_bloom_data", 0, buffers , MAX_BLOOM_DPU_SIZE * NR_TASKLETS * sizeof(uint8_t));
-			}, false); // Sequential because we need to restore in the right order (but calls can be async)
+			}, false); // Sequential because we need to restore in the same order it was got (but calls can be async)
 			_pim_rankset.wait_all_ranks_done();
         }
 

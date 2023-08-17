@@ -59,19 +59,22 @@ int main(int argc, char** argv) {
 	std::shuffle(std::begin(items), std::end(items), rng);
 	TIMEIT(bloom_filter->contains_bulk(items));
 
-    std::cout << "> Getting data..." << std::endl;
-    std::vector<uint8_t> data;
-    TIMEIT(data = bloom_filter->get_data());
+    // std::cout << "> Getting data..." << std::endl;
+    // std::vector<uint8_t> data;
+    // TIMEIT(data = bloom_filter->get_data());
     
-    std::cout << "> Creating a new filter..." << std::endl;
-    std::unique_ptr<IBloomFilter> bloom_filter2 = std::make_unique<PimBloomFilter<HashPimItemDispatcher>>(bloom_size2, nb_hash, NB_THREADS, nb_ranks, dpu_profile);
-    std::cout << "Weight is " << bloom_filter2->get_weight() << std::endl;
+    // std::cout << "> Creating a new filter..." << std::endl;
+    // std::unique_ptr<IBloomFilter> bloom_filter2 = std::make_unique<PimBloomFilter<HashPimItemDispatcher>>(bloom_size2, nb_hash, NB_THREADS, nb_ranks, dpu_profile);
+    // std::cout << "Weight is " << bloom_filter2->get_weight() << std::endl;
 
-    std::cout << "> Loading data into the new filter..." << std::endl;
-    TIMEIT(bloom_filter2->set_data(data));
+    // std::cout << "> Loading data into the new filter..." << std::endl;
+    // TIMEIT(bloom_filter2->set_data(data));
 
-    std::cout << "> Computing weight of new filter after data loading..." << std::endl;
-    std::cout << "Weight is " << bloom_filter2->get_weight() << std::endl;
+    // std::cout << "> Computing weight of new filter after data loading..." << std::endl;
+    // std::cout << "Weight is " << bloom_filter2->get_weight() << std::endl;
+
+    std::cout << "size of " << sizeof(BloomFunction) << std::endl;
+    
 
     std::cout << "> The end." << std::endl;
 

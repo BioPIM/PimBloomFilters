@@ -20,7 +20,7 @@ BARRIER_INIT(all_tasklets_barrier_1, NR_TASKLETS);
 BARRIER_INIT(all_tasklets_barrier_2, NR_TASKLETS);
 
 // Input from host
-__host enum BloomFunction fctcall_id;
+__mram_noinit enum BloomFunction fctcall_id;
 __mram_noinit struct BloomInfo init_data;
 __mram_noinit uint64_t items[MAX_NB_ITEMS_PER_DPU + 1];
 // __mram_noinit size_t dpu_uid;

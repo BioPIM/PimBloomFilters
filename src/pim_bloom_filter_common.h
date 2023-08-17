@@ -12,6 +12,7 @@ enum BloomFunction {
     BLOOM_WEIGHT = 1,
     BLOOM_INSERT = 2,
     BLOOM_LOOKUP = 3,
+    DEFAULT = INT64_MAX,
 };
 
 struct BloomInfo {

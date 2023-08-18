@@ -29,7 +29,7 @@ add_library(${LIB_NAME} STATIC
     bloom_filter_factory.cpp
 )
 
-target_compile_options(${LIB_NAME} PRIVATE -Wall -Wextra)
+target_compile_options(${LIB_NAME} PRIVATE -Wall -Wextra -g3)
 if(FSANITIZE)
     target_compile_options(${LIB_NAME} PRIVATE -fsanitize=leak)
 endif(FSANITIZE)

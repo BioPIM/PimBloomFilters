@@ -24,10 +24,9 @@ class HashPimItemDispatcher : public PimDispatcher<uint64_t> {
 
 		PimUnitUID dispatch(const uint64_t& item) override {
 			uint64_t h0 = _hash_functions(item, 0);
-			size_t rank_id = fastrange32(h0, get_pim_rankset().get_nb_ranks());
-			size_t nb_dpus_in_rank = get_pim_rankset().get_nb_dpu_in_rank(rank_id);
-			uint64_t h1 = _hash_functions(item, 1); // IMPORTANT: use a different hash otherwise some correlation can happen and some indexes may never be picked
-			size_t dpu_id = fastrange32(h1, nb_dpus_in_rank);
+			// Use higher 32 bits for rank and lower 32 bits for dpu inside a rank
+			size_t rank_id = fastrange32(static_cast<uint32_t>(h0 >> 32), get_pim_rankset().get_nb_ranks());
+			size_t dpu_id = fastrange32(static_cast<uint32_t>(h0), get_pim_rankset().get_nb_dpu_in_rank(rank_id));
 			return PimUnitUID(rank_id, dpu_id);
 		}
 	

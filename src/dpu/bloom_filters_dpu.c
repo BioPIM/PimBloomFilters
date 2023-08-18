@@ -8,6 +8,7 @@
 
 #include "bloom_filters_dpu.h"
 
+
 /* -------------------------------------------------------------------------- */
 /*                                  Variables                                 */
 /* -------------------------------------------------------------------------- */
@@ -35,6 +36,9 @@ __mram_noinit uint64_t nb_hash;
 
 // Output to host
 __mram_noinit uint64_t result;
+__mram_noinit uint64_t perf_counter;
+__mram_noinit uint64_t perf_ref_id;
+
 
 /* -------------------------------------------------------------------------- */
 /*                                  Utilities                                 */
@@ -61,11 +65,19 @@ static inline void reduce_all_results() {
 	}
 }
 
+
 /* -------------------------------------------------------------------------- */
 /*                                    Main                                    */
 /* -------------------------------------------------------------------------- */
 
 int main() {
+
+	#ifdef DO_DPU_PERFCOUNTER
+	perfcounter_config(COUNT_CYCLES, true);
+	// perfcounter_config(COUNT_INSTRUCTIONS, true);
+	perf_ref_id = args[0];
+	#endif
+
 
 	/* ----------------------- Compute tasklet useful data ---------------------- */
 
@@ -74,7 +86,6 @@ int main() {
 	__dma_aligned uint8_t cache8[CACHE8_SIZE]; // Local cache for each tasklet
 	uint64_t* cache64 = (uint64_t*) cache8;
 
-	// perfcounter_config(COUNT_CYCLES, true);
 
 	/* ------------------------------ Call function ----------------------------- */
 
@@ -212,7 +223,9 @@ int main() {
 		
 	}
 
-    // nb_cycles = perfcounter_get();
+	#ifdef DO_DPU_PERFCOUNTER
+    perf_counter = perfcounter_get();
+	#endif
     
     return 0;
 }

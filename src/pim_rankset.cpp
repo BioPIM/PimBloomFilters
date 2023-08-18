@@ -1,6 +1,7 @@
 #ifndef F347470E_1730_41E9_9AE3_45A884CD2BFF
 #define F347470E_1730_41E9_9AE3_45A884CD2BFF
 
+#include "pim_common.h"
 #include "spdlog/spdlog.h"
 
 #include <dpu>
@@ -139,6 +140,13 @@ public:
         DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_SYNCHRONOUS));
         wait_rank_done(rank_id);
         _try_print_dpu_logs(rank_id);
+
+        #ifdef DO_DPU_PERFCOUNTER
+        auto perf_value = get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "perf_counter", 0, sizeof(uint64_t));
+        auto perf_ref_id = get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "perf_ref_id", 0, sizeof(uint64_t));
+        spdlog::info("Average perf value is {} [{}]", perf_value / get_nb_dpu_in_rank(rank_id), perf_ref_id / get_nb_dpu_in_rank(rank_id));
+        #endif
+        
         #else
         std::this_thread::sleep_for(std::chrono::milliseconds(50)); // Simulate a 50ms run
         #endif
@@ -290,6 +298,12 @@ private:
         spdlog::debug("DPU callback: rank {} has finished", rank_id);
         _try_print_dpu_logs(rank_id);
         _trace_rank_done();
+        
+        #ifdef DO_DPU_PERFCOUNTER
+        auto perf_value = get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "perf_counter", 0, sizeof(uint64_t));
+        auto perf_ref_id = get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "perf_ref_id", 0, sizeof(uint64_t));
+        spdlog::info("Average perf value is {} [{}]", perf_value / get_nb_dpu_in_rank(rank_id), perf_ref_id / get_nb_dpu_in_rank(rank_id));
+        #endif
 	}
 
     /* --------------------------------- Logging -------------------------------- */

@@ -101,7 +101,7 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			const size_t nb_items = items.size();
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
-			const size_t nb_workers = 8;
+			const size_t nb_workers = 4;
 
 			const uint64_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU / nb_ranks;
 			const size_t bucket_size = max_nb_items_per_bucket + 2;

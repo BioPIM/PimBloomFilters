@@ -12,12 +12,6 @@ enum BloomFunction {
     BLOOM_WEIGHT = 1,
     BLOOM_INSERT = 2,
     BLOOM_LOOKUP = 3,
-    DEFAULT = INT64_MAX,
-};
-
-struct BloomInfo {
-    uint64_t dpu_size2;
-    uint64_t nb_hash;
 };
 
 #define DPU_UID(rank_id,dpu_id) ((rank_id) * 100 + (dpu_id))

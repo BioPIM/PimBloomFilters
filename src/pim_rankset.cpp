@@ -107,9 +107,23 @@ public:
         #endif
     }
 
+    template<typename T>
+    void broadcast_to_rank_sync(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, const std::vector<T>& data) {
+        #ifndef IGNORE_DPU_CALLS
+        DPU_ASSERT(dpu_broadcast_to(_sets[rank_id], symbol_name, symbol_offset, data.data(), sizeof(T) * data.size(), DPU_XFER_DEFAULT));
+        #endif
+    }
+
     void broadcast_to_rank_async(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, const void * src, size_t length) {
         #ifndef IGNORE_DPU_CALLS
         DPU_ASSERT(dpu_broadcast_to(_sets[rank_id], symbol_name, symbol_offset, src, length, DPU_XFER_ASYNC));
+        #endif
+    }
+
+    template<typename T>
+    void broadcast_to_rank_async(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, const std::vector<T>& data) {
+        #ifndef IGNORE_DPU_CALLS
+        DPU_ASSERT(dpu_broadcast_to(_sets[rank_id], symbol_name, symbol_offset, data.data(), sizeof(T) * data.size(), DPU_XFER_ASYNC));
         #endif
     }
 

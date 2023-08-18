@@ -73,9 +73,6 @@ int main(int argc, char** argv) {
     // std::cout << "> Computing weight of new filter after data loading..." << std::endl;
     // std::cout << "Weight is " << bloom_filter2->get_weight() << std::endl;
 
-    std::cout << "size of " << sizeof(BloomFunction) << std::endl;
-    
-
     std::cout << "> The end." << std::endl;
 
 }

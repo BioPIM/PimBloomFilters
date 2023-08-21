@@ -100,24 +100,25 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			const size_t nb_items = items.size();
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
-			const size_t nb_workers = 4;
+			const size_t nb_workers = 6;
 
-			const uint64_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU / nb_ranks;
+			const size_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU / nb_ranks;
 			const size_t bucket_size = max_nb_items_per_bucket + 2;
 			const size_t bucket_length = sizeof(uint64_t) * bucket_size;
 
-			auto statistics = LaunchStatistics();
+			// auto statistics = LaunchStatistics();
 
 			auto done_containers = std::vector<std::vector<std::vector<std::vector<uint64_t>>>>(nb_workers);
+			size_t estimated_size = nb_items / (_pim_rankset.get_nb_dpu() * max_nb_items_per_bucket * nb_workers) * nb_ranks * 1.5;
 			for (auto done_container : done_containers) {
-				done_container.reserve(nb_items / max_nb_items_per_bucket / nb_workers);
+				done_container.reserve(estimated_size);
 			}
 
 			#pragma omp parallel num_threads(nb_workers)
 			{
 
 				int worker_id = omp_get_thread_num();
-				auto rank_buckets = std::vector<std::vector<std::vector<uint64_t>>>(nb_ranks);
+				auto buckets_done_idx = std::vector<size_t>(nb_ranks, _NO_MAPPING);
 				auto &done_container = done_containers[worker_id];
 				
 				// Consider a partition of the items
@@ -125,50 +126,54 @@ class PimBloomFilter : public BulkBloomFilter {
 					uint64_t item = items[i];
 					auto dispatch_data = _item_dispatcher.dispatch(item);
 					size_t rank_id = dispatch_data.get_rank_id();
-					size_t bucket_idx = dispatch_data.get_dpu_id();
-					size_t nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
 
-					auto &buckets = rank_buckets[rank_id];
+					auto idx = buckets_done_idx[rank_id];
 					
-					if (buckets.empty()) {
-						buckets.resize(nb_dpus_in_rank);
+					if (idx == _NO_MAPPING) {
+						idx = done_container.size();
+						buckets_done_idx[rank_id] = idx;
+						done_container.emplace_back();
+						auto &buckets = done_container.back();
+						size_t nb_dpu_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
+						buckets.reserve(nb_dpu_in_rank);
+						buckets.resize(nb_dpu_in_rank);
 						for (auto &bucket : buckets) {
+							bucket.reserve(bucket_size);
 							bucket.resize(bucket_size, 0);
 							bucket[0] = BloomFunction::BLOOM_INSERT;
 						}
 					}
 					
-					auto &bucket = buckets[bucket_idx];
+					auto &buckets = done_container[idx];
+					auto &bucket = buckets[dispatch_data.get_dpu_id()];
 					bucket[1]++;
 					bucket[bucket[1] + 1] = item;
 
 					if ((bucket[1] >= max_nb_items_per_bucket)) {
-						done_container.push_back(std::move(buckets));
-						_insert_launch(rank_id, done_container.back(), bucket_length, statistics);
-						rank_buckets[rank_id] = std::vector<std::vector<uint64_t>>();
+						_insert_launch(rank_id, buckets, bucket_length);
+						buckets_done_idx[rank_id] = _NO_MAPPING;
 					}
 					
 				}
 				
 				// Launch remaining buckets that are not full
 				for (size_t rank_id = 0; rank_id < nb_ranks; rank_id++) {
-					auto &buckets = rank_buckets[rank_id];
-					if (!buckets.empty()) {
-						done_container.push_back(std::move(buckets));
-						_insert_launch(rank_id, done_container.back(), bucket_length, statistics);
+					auto idx = buckets_done_idx[rank_id];
+					if (idx != _NO_MAPPING) {
+						_insert_launch(rank_id, done_container[idx], bucket_length);
 					}
 				}
 
 				// Call to see on trace when workers are done
-				_worker_done();
+				// _worker_done();
 				
 			}
 			
 			_pim_rankset.wait_all_ranks_done();
 
-			if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {
-				statistics.print();
-			}
+			// if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {
+			// 	statistics.print();
+			// }
 
 		}
 
@@ -368,7 +373,9 @@ class PimBloomFilter : public BulkBloomFilter {
 			return std::string(DPU_BINARIES_DIR) + "/bloom_filters_dpu";
 		}
 
-		void _insert_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t& bucket_length, LaunchStatistics& statistics) {
+		const size_t _NO_MAPPING = UINT64_MAX;
+
+		void _insert_launch(size_t rank_id, std::vector<std::vector<uint64_t>>& buckets, const size_t& bucket_length) {
 
 			_pim_rankset.lock_rank(rank_id); // Lock so that other workers don't stack async calls in-between
 
@@ -397,7 +404,7 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			spdlog::debug("Stacked calls to launch rank {}", rank_id);
 
-			(void) statistics;
+			// (void) statistics;
 			// if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {
 			// 	uint64_t items_sent = 0;
 			// 	for (auto &bucket : buckets) {

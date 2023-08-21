@@ -102,14 +102,17 @@ class PimBloomFilter : public BulkBloomFilter {
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
 			const size_t nb_workers = 6;
 
-			const size_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU / nb_ranks;
+			const size_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU;
 			const size_t bucket_size = max_nb_items_per_bucket + 2;
 			const size_t bucket_length = sizeof(uint64_t) * bucket_size;
 
 			// auto statistics = LaunchStatistics();
 
 			auto done_containers = std::vector<std::vector<std::vector<std::vector<uint64_t>>>>(nb_workers);
+
+			// Buckets will not be full all the same time and rank gets launched at first bucket full, so increase the optimal repartition by 50% to get an upper bound estimation
 			size_t estimated_size = nb_items / (_pim_rankset.get_nb_dpu() * max_nb_items_per_bucket * nb_workers) * nb_ranks * 1.5;
+
 			for (auto done_container : done_containers) {
 				done_container.reserve(estimated_size);
 			}
@@ -123,7 +126,7 @@ class PimBloomFilter : public BulkBloomFilter {
 				
 				// Consider a partition of the items
 				for (size_t i = worker_id; i < nb_items; i += nb_workers) {
-					uint64_t item = items[i];
+					const uint64_t &item = items[i];
 					auto dispatch_data = _item_dispatcher.dispatch(item);
 					size_t rank_id = dispatch_data.get_rank_id();
 
@@ -139,19 +142,21 @@ class PimBloomFilter : public BulkBloomFilter {
 						buckets.resize(nb_dpu_in_rank);
 						for (auto &bucket : buckets) {
 							bucket.reserve(bucket_size);
-							bucket.resize(bucket_size, 0);
-							bucket[0] = BloomFunction::BLOOM_INSERT;
+							bucket.push_back(BloomFunction::BLOOM_INSERT);
+							bucket.push_back(0);
 						}
 					}
 					
 					auto &buckets = done_container[idx];
 					auto &bucket = buckets[dispatch_data.get_dpu_id()];
-					bucket[1]++;
-					bucket[bucket[1] + 1] = item;
+					bucket.push_back(item);
 
-					if ((bucket[1] >= max_nb_items_per_bucket)) {
+					if ((bucket.size() >= bucket_size)) {
+						for (auto &the_bucket : buckets) {
+							the_bucket[1] = the_bucket.size() - 2;
+						}
 						_insert_launch(rank_id, buckets, bucket_length);
-						buckets_done_idx[rank_id] = _NO_MAPPING;
+						buckets_done_idx[rank_id] = _NO_MAPPING; // These buckets are launched, forget the mapping so that other buckets get created later
 					}
 					
 				}
@@ -160,7 +165,11 @@ class PimBloomFilter : public BulkBloomFilter {
 				for (size_t rank_id = 0; rank_id < nb_ranks; rank_id++) {
 					auto idx = buckets_done_idx[rank_id];
 					if (idx != _NO_MAPPING) {
-						_insert_launch(rank_id, done_container[idx], bucket_length);
+						auto &buckets = done_container[idx];
+						for (auto &the_bucket : buckets) {
+							the_bucket[1] = the_bucket.size() - 2;
+						}
+						_insert_launch(rank_id, buckets, bucket_length);
 					}
 				}
 
@@ -402,7 +411,7 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			_pim_rankset.unlock_rank(rank_id);
 
-			spdlog::debug("Stacked calls to launch rank {}", rank_id);
+			// spdlog::debug("Stacked calls to launch rank {}", rank_id);
 
 			// (void) statistics;
 			// if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {
@@ -439,7 +448,7 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			_pim_rankset.unlock_rank(rank_id);
 
-			spdlog::debug("Stacked calls to launch rank {}", rank_id);
+			// spdlog::debug("Stacked calls to launch rank {}", rank_id);
 
 			(void) statistics;
 			// if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {

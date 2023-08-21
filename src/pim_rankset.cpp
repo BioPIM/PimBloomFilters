@@ -295,14 +295,14 @@ private:
     }
 
     void _rank_finished_callback(size_t rank_id) {
-        spdlog::debug("DPU callback: rank {} has finished", rank_id);
+        // spdlog::debug("DPU callback: rank {} has finished", rank_id);
         _try_print_dpu_logs(rank_id);
         _trace_rank_done();
         
         #ifdef DO_DPU_PERFCOUNTER
         auto perf_value = get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "perf_counter", 0, sizeof(uint64_t));
         auto perf_ref_id = get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "perf_ref_id", 0, sizeof(uint64_t));
-        spdlog::info("Average perf value is {} [{}]", perf_value / get_nb_dpu_in_rank(rank_id), perf_ref_id / get_nb_dpu_in_rank(rank_id));
+        // spdlog::info("Average perf value is {} [{}]", perf_value / get_nb_dpu_in_rank(rank_id), perf_ref_id / get_nb_dpu_in_rank(rank_id));
         #endif
 	}
 

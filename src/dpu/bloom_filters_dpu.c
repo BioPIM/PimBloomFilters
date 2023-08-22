@@ -93,13 +93,13 @@ int main() {
 
 		case BLOOM_INIT: {
 
-			size_t _bloom_nb_bytes = ((1UL << args[1]) >> 3UL);
+			size_t _bloom_nb_bytes = (1 << (args[1] - 3));
 
 			// Basic version: memset in mram, a bit slow
-			// memset(bloom_data, (uint8_t) 0, _bloom_nb_bytes * sizeof(uint8_t));
+			// memset(_bloom_tasklet_data, 0, _bloom_nb_bytes * sizeof(uint8_t));
 
 			// Better version: use a cache filled with zeros in wram
-			memset(cache8, (uint8_t) 0, CACHE8_SIZE * sizeof(uint8_t));
+			for (size_t i = 0; i < CACHE8_SIZE; i++) { cache8[i] = 0; }
 			for (size_t i = 0; i < _bloom_nb_bytes; i += CACHE8_SIZE) {
 				if ((i + CACHE8_SIZE) >= _bloom_nb_bytes) {
 					mram_write(cache8, &_bloom_tasklet_data[i], CEIL8(_bloom_nb_bytes - i) * sizeof(uint8_t));
@@ -114,7 +114,7 @@ int main() {
 				nb_hash = args[2];
 				dpu_printf("Filter size2 = %lu\n", dpu_size2);
 			}
-			
+
 			break;
 
 		}
@@ -122,7 +122,7 @@ int main() {
 		case BLOOM_WEIGHT: {
 
 			uint64_t wram_dpu_size2 = dpu_size2;
-			size_t _bloom_nb_bytes = ((1UL << wram_dpu_size2) >> 3UL);
+			size_t _bloom_nb_bytes = (1 << (dpu_size2 - 3));
 		
 			_tasklet_results[me()] = 0;
 			if (wram_dpu_size2 < 3) {

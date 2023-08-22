@@ -2,8 +2,8 @@
 #define BAA0DC56_5396_444D_BF61_18C9AB62629A
 
 #include <stdint.h>
-#include "dpu_utils.h"
 #include "pim_bloom_filter_common.h"
+#include "dpu_utils.h"
 
 const uint8_t bit_mask [8] = {
     0x01,  //00000001

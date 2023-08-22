@@ -5,8 +5,8 @@
 #include <queue>
 #include <thread>
 
-#include "pim_rankset.cpp"
 #include "pim_bloom_filter_common.h"
+#include "pim_rankset.cpp"
 
 #include"bloom_filter.hpp"
 
@@ -70,17 +70,17 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			_dpu_size2 = ceil(log(_get_size() / (_pim_rankset.get_nb_dpu() * NR_TASKLETS)) / log(2));
 
-			if ((_dpu_size2 >> 3) > MAX_BLOOM_DPU_SIZE2) {
+			if ((_dpu_size2 - 3) > MAX_BLOOM_DPU_SIZE2) {
 				throw std::invalid_argument(
 					std::string("Error: filter size2 per DPU is bigger than max space available (")
 					+ std::to_string(_dpu_size2)
 					+ std::string(" > ")
-					+ std::to_string(MAX_BLOOM_DPU_SIZE2)
+					+ std::to_string(MAX_BLOOM_DPU_SIZE2 + 3)
 					+ std::string("), try to reduce the size or increase the number of DPUs")
 				);
 			}
-
-			auto args = std::vector<uint64_t>{BloomFunction::BLOOM_INIT, _dpu_size2, get_nb_hash()};
+			
+			std::vector<uint64_t> args{BloomFunction::BLOOM_INIT, _dpu_size2, get_nb_hash()};
 			_pim_rankset.for_each_rank([this, args](size_t rank_id) {
 				_pim_rankset.broadcast_to_rank_sync(rank_id, "args", 0, args);
 
@@ -105,8 +105,6 @@ class PimBloomFilter : public BulkBloomFilter {
 			const size_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU;
 			const size_t bucket_size = max_nb_items_per_bucket + 2;
 			const size_t bucket_length = sizeof(uint64_t) * bucket_size;
-
-			// auto statistics = LaunchStatistics();
 
 			auto done_containers = std::vector<std::vector<std::vector<std::vector<uint64_t>>>>(nb_workers);
 
@@ -173,6 +171,8 @@ class PimBloomFilter : public BulkBloomFilter {
 					}
 				}
 
+				// spdlog::info("Worker {} did {} launches", worker_id, done_container.size());
+
 				// Call to see on trace when workers are done
 				// _worker_done();
 				
@@ -190,7 +190,7 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			const size_t nb_items = items.size();
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
-			const size_t nb_workers = 8;
+			const size_t nb_workers = 6;
 
 			const uint64_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU / nb_ranks;
 			const size_t bucket_size = max_nb_items_per_bucket + 2;

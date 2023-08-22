@@ -3,12 +3,10 @@
 
 #include "pim_common.h"
 
-// #define LOG_DPU
-
 #define CEIL8(x) ((((x) + 7) >> 3) << 3)
 
-#define MAX_NB_ITEMS_PER_DPU (1UL << 10)
-#define MAX_BLOOM_DPU_SIZE2 17
+#define MAX_NB_ITEMS_PER_DPU (1 << 10) // 10 seems to be the best config (found empirically)
+#define MAX_BLOOM_DPU_SIZE2 18
 #define MAX_BLOOM_DPU_SIZE (1 << MAX_BLOOM_DPU_SIZE2)
 
 enum BloomFunction {

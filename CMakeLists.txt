@@ -17,7 +17,6 @@ set(CMAKE_BUILD_TYPE Release)
 
 set(TASKLETS "16")
 
-option(LOG_DPU "Print log messages from DPUs")
 option(FSANITIZE "Compile with fsanitize=address flags")
 
 # ------------------------------------------------------------------------------

@@ -12,9 +12,6 @@ foreach(TARGET ${TARGETS})
         NR_TASKLETS=${TASKLETS}
         STACK_SIZE_DEFAULT=${STACK_SIZE}
     )
-    if (LOG_DPU)
-        target_compile_definitions(${TARGET} PRIVATE "LOG_DPU")
-    endif(LOG_DPU)
     target_link_options(${TARGET} PRIVATE
         -DNR_TASKLETS=${TASKLETS}
         -DSTACK_SIZE_DEFAULT=${STACK_SIZE}

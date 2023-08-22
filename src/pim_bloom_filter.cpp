@@ -69,8 +69,10 @@ class PimBloomFilter : public BulkBloomFilter {
 			}
 
 			_dpu_size2 = ceil(log(_get_size() / (_pim_rankset.get_nb_dpu() * NR_TASKLETS)) / log(2));
+			
+			// spdlog::info("dpu_size2 is {}", _dpu_size2);
 
-			if ((_dpu_size2 - 3) > MAX_BLOOM_DPU_SIZE2) {
+			if (_dpu_size2  > (MAX_BLOOM_DPU_SIZE2 + 3)) {
 				throw std::invalid_argument(
 					std::string("Error: filter size2 per DPU is bigger than max space available (")
 					+ std::to_string(_dpu_size2)
@@ -179,10 +181,6 @@ class PimBloomFilter : public BulkBloomFilter {
 			}
 			
 			_pim_rankset.wait_all_ranks_done();
-
-			// if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {
-			// 	statistics.print();
-			// }
 
 		}
 

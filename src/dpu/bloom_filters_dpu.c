@@ -73,8 +73,11 @@ static inline void reduce_all_results() {
 int main() {
 
 	#ifdef DO_DPU_PERFCOUNTER
-	perfcounter_config(COUNT_CYCLES, true);
-	// perfcounter_config(COUNT_INSTRUCTIONS, true);
+	#if(DO_DPU_PERFCOUNTER == 0)
+		perfcounter_config(COUNT_CYCLES, true);
+	#else
+		perfcounter_config(COUNT_INSTRUCTIONS, true);
+	#endif
 	perf_ref_id = args[0];
 	#endif
 

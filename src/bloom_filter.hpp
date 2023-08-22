@@ -24,7 +24,7 @@ class IBloomFilter {
         /// @param nb_hash number of hash functions
         /// @param nb_threads number of threads for multithreaded sections
         IBloomFilter(size_t size2, size_t nb_hash, size_t nb_threads = 1) : _size2(size2), _nb_hash(nb_hash), _nb_threads(nb_threads),
-                _size(1 << _size2), _size_reduced(_size - 1) {
+                _size(1UL << _size2), _size_reduced(_size - 1) { // 1UL is important otherwise wrong for _size2 >= 31
 
             if (size2 < 3) {
                 throw std::invalid_argument(std::string("Error: bloom size2 must be >= 3"));

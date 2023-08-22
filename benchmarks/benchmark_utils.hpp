@@ -5,14 +5,27 @@
 #include <omp.h>
 #include <cstdint>
 #include <cstdio>
+#include <sstream>
+
+double last_timeit_measure = 0.0;
 
 #define TIMEIT(f) \
     do { \
         double start = omp_get_wtime(); \
         f; \
         double stop = omp_get_wtime(); \
-        std::cout << "Took " << stop - start << " seconds" << std::endl; \
+        last_timeit_measure = stop - start; \
+        std::cout << "Took " << last_timeit_measure <<  " seconds" << std::endl; \
     } while (0)
+
+template<typename... Args>
+std::string get_last_timeit_log(Args... args) {
+    std::ostringstream oss;
+    using expander = int[];
+    oss << last_timeit_measure;
+    (void) expander{ 0, (oss << "," << args, void(), 0)... };
+    return oss.str();
+}
 
 std::vector<uint64_t> get_seq_items(const size_t nb, const uint64_t start_offset = 0) {
     std::vector<uint64_t> items(nb);

@@ -1,5 +1,6 @@
 #include "cxxopts/cxxopts.hpp"
 #include "spdlog/spdlog.h"
+#include <spdlog/sinks/basic_file_sink.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -23,6 +24,7 @@ int main(int argc, char** argv) {
         ("n,items", "Number of items", cxxopts::value<size_t>()->default_value("10000"))
         ("s,simulator", "Use the simulator", cxxopts::value<bool>()->default_value("false"))
         ("h,help", "Print usage")
+        ("l,log", "Log perf values", cxxopts::value<bool>()->default_value("false"))
     ;
 
     auto result = options.parse(argc, argv);
@@ -32,11 +34,21 @@ int main(int argc, char** argv) {
         exit(0);
     }
 
+    auto bench_logger = spdlog::basic_logger_mt("bench_logger", "bench1_perfs.csv");
+    bench_logger->set_pattern("%v");
+
     size_t nb_ranks = result["rank"].as<size_t>();
     size_t nb_hash = result["hash"].as<size_t>();
     size_t bloom_size2 = result["size2"].as<size_t>();
     size_t nb_items = result["items"].as<size_t>();
     DpuProfile dpu_profile = result["simulator"].as<bool>() ? DpuProfile::SIMULATOR : DpuProfile::HARDWARE;
+
+    bool do_log_perf = result["log"].as<bool>();
+    auto log_timeit = [&bench_logger, nb_hash, bloom_size2, nb_items, nb_ranks, do_log_perf](std::string id) {
+        if (do_log_perf) {
+            bench_logger->info("{}", get_last_timeit_log(id, nb_hash, bloom_size2, nb_items, nb_ranks));
+        }
+    };
 
 	std::vector<uint64_t> items = get_seq_items(nb_items);
 
@@ -45,19 +57,23 @@ int main(int argc, char** argv) {
 	std::cout << "> Creating filter..." << std::endl;
 	std::unique_ptr<IBloomFilter> bloom_filter;
     TIMEIT(bloom_filter = std::make_unique<PimBloomFilter<HashPimItemDispatcher>>(bloom_size2, nb_hash, NB_THREADS, nb_ranks, dpu_profile));
+    log_timeit("init");
 
     std::cout << "> Inserting many items..." << std::endl;
 	TIMEIT(bloom_filter->insert_bulk(items));
+    log_timeit("insert");
 
     std::cout << "> Computing weight..." << std::endl;
     size_t weight;
     TIMEIT(weight = bloom_filter->get_weight());
+    log_timeit("weight");
     std::cout << "Weight is " << weight << std::endl;
 
     std::cout << "> Querying all inserted items in a random order..." << std::endl;
 	auto rng = std::default_random_engine{};
 	std::shuffle(std::begin(items), std::end(items), rng);
 	TIMEIT(bloom_filter->contains_bulk(items));
+    log_timeit("lookup");
 
     // std::cout << "> Getting data..." << std::endl;
     // std::vector<uint8_t> data;

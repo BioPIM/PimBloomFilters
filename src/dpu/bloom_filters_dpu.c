@@ -191,7 +191,9 @@ int main() {
 			// if (_nb_items > MAX_NB_ITEMS_PER_DPU) {
 			// 	halt(); // This should not happen, there is an error somewhere
 			// }
-			
+			if (me() == 0) {
+				gcache64[0] = _nb_items; // Write number of items in the result because the host will need it
+			}
 			size_t cache_idx = 2;
 			size_t current_start_idx = 0;
 			for (size_t i = 0; i < _nb_items; i++) {

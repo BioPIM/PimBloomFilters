@@ -40,7 +40,7 @@ add_subdirectory(benchmarks)
 #                               Copy some scripts                               
 # ------------------------------------------------------------------------------
 
-set(UTILITY_SCRIPTS dtrace.sh)
+set(UTILITY_SCRIPTS dtrace.sh run_bench1_perfs.sh run_bench2_perfs.sh)
 foreach(SCRIPT ${UTILITY_SCRIPTS})
     configure_file(${SCRIPT} ${SCRIPT} COPYONLY)
 endforeach(SCRIPT ${UTILITY_SCRIPTS})

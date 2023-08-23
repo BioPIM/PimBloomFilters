@@ -100,6 +100,8 @@ class PimBloomFilter : public BulkBloomFilter {
 
 		void insert_bulk(const std::vector<uint64_t>& items) override {
 
+			_pim_rankset.start_workload_profiling();
+
 			const size_t nb_items = items.size();
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
 			const size_t nb_workers = 6;
@@ -183,9 +185,13 @@ class PimBloomFilter : public BulkBloomFilter {
 			
 			_pim_rankset.wait_all_ranks_done();
 
+			_pim_rankset.end_workload_profiling();
+
 		}
 
 		std::vector<bool> contains_bulk(const std::vector<uint64_t>& items) override {
+
+			_pim_rankset.start_workload_profiling();
 
 			const size_t nb_items = items.size();
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
@@ -291,6 +297,8 @@ class PimBloomFilter : public BulkBloomFilter {
             for (size_t i = 0; i < int_result.size(); i++) {
                 result[i] = int_result[i];
             }
+
+			_pim_rankset.end_workload_profiling();
 
             return result;
 		}
@@ -415,6 +423,8 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			_pim_rankset.launch_rank_async(rank_id);
 
+			_pim_rankset.add_workload_profiling_callback(rank_id);
+
 			_pim_rankset.unlock_rank(rank_id);
 
 			// spdlog::debug("Stacked calls to launch rank {}", rank_id);
@@ -450,6 +460,8 @@ class PimBloomFilter : public BulkBloomFilter {
 					}
 				}
 			});
+
+			_pim_rankset.add_workload_profiling_callback(rank_id);
 
 			_pim_rankset.unlock_rank(rank_id);
 

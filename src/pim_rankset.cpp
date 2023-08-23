@@ -154,6 +154,13 @@ public:
 
     void launch_rank_async(size_t rank_id) {
         #ifndef IGNORE_DPU_CALLS
+        if (_do_workload_profiling) {
+            add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
+                auto rankset = static_cast<PimRankSet*>(arg);
+                double now = omp_get_wtime();
+                rankset->_workload_measures[rank_id] += (now - rankset->_workload_begin[rank_id]);
+            });
+        }
         DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_ASYNCHRONOUS));
         add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
             auto rankset = static_cast<PimRankSet*>(arg);
@@ -163,6 +170,34 @@ public:
         _rank_finished_callback(rank_id);
         #endif
 	}
+
+    void start_workload_profiling() {
+        double start = omp_get_wtime();
+        _workload_measures.resize(0);
+        _workload_measures.resize(_nb_ranks, 0.0);
+        _workload_begin.resize(0);
+        _workload_begin.resize(_nb_ranks, start);
+        _do_workload_profiling = true;
+    }
+
+    void add_workload_profiling_callback(size_t rank_id) {
+        if (_do_workload_profiling) {
+            add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
+                auto rankset = static_cast<PimRankSet*>(arg);
+                double now = omp_get_wtime();
+                rankset->_workload_begin[rank_id] = now;
+            });
+        }
+    }
+
+    void end_workload_profiling() {
+        _do_workload_profiling = false;
+        double stop = omp_get_wtime();
+        for (size_t rank_id = 0; rank_id < _nb_ranks; rank_id++) {
+            _workload_measures[rank_id] += (stop - _workload_begin[rank_id]);
+            spdlog::info("Rank {} had {} seconds of idle time", rank_id, _workload_measures[rank_id]);
+        }
+    }
 
     void add_callback_async(size_t rank_id, void* arg, std::function<void (size_t, void*)> func) {
         auto callback_data = new CallbackData(rank_id, arg, func);
@@ -268,6 +303,12 @@ private:
             return "";
         }
     }
+
+    /* --------------------------- Workload profiling --------------------------- */
+
+    bool _do_workload_profiling = false;
+    std::vector<double> _workload_measures;
+    std::vector<double> _workload_begin;
 
     /* -------------------------------- Callbacks ------------------------------- */
 

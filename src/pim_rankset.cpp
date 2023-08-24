@@ -17,6 +17,7 @@
 #include <memory>
 
 // #define IGNORE_DPU_CALLS
+#define IGNORE_WORKLOAD_PROFILING
 
 void __attribute__((optimize(0))) _trace_rank_done() {}
 
@@ -162,16 +163,26 @@ public:
             });
         }
         DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_ASYNCHRONOUS));
-        add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
-            auto rankset = static_cast<PimRankSet*>(arg);
-            rankset->_rank_finished_callback(rank_id);
-        });
+        #ifdef DO_DPU_PERFCOUNTER
+        bool print_perf = true;
+        #else
+        bool print_perf = false;
+        #endif
+        if (_print_dpu_logs || print_perf) { // No need to do this callback if we don't care about logs or perfs
+            add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
+                auto rankset = static_cast<PimRankSet*>(arg);
+                rankset->_rank_finished_callback(rank_id);
+            });
+        }
         #else
         _rank_finished_callback(rank_id);
         #endif
 	}
 
     void start_workload_profiling() {
+        #ifdef IGNORE_WORKLOAD_PROFILING
+        return;
+        #endif
         double start = omp_get_wtime();
         _workload_measures.resize(0);
         _workload_measures.resize(_nb_ranks, 0.0);
@@ -191,11 +202,13 @@ public:
     }
 
     void end_workload_profiling() {
-        _do_workload_profiling = false;
-        double stop = omp_get_wtime();
-        for (size_t rank_id = 0; rank_id < _nb_ranks; rank_id++) {
-            _workload_measures[rank_id] += (stop - _workload_begin[rank_id]);
-            spdlog::info("Rank {} had {} seconds of idle time", rank_id, _workload_measures[rank_id]);
+        if (_do_workload_profiling) {
+            _do_workload_profiling = false;
+            double stop = omp_get_wtime();
+            for (size_t rank_id = 0; rank_id < _nb_ranks; rank_id++) {
+                _workload_measures[rank_id] += (stop - _workload_begin[rank_id]);
+                spdlog::info("Rank {} had {} seconds of idle time", rank_id, _workload_measures[rank_id]);
+            }
         }
     }
 
@@ -373,7 +386,14 @@ class PimUnitUID {
 
     public:
 
+        PimUnitUID() : _rank_id(0), _dpu_id(0) {}
         PimUnitUID(size_t rank_id, size_t dpu_id) : _rank_id(rank_id), _dpu_id(dpu_id) {}
+
+        PimUnitUID& operator=(const PimUnitUID& other) {
+            _rank_id = other._rank_id;
+            _dpu_id = other._dpu_id;
+            return *this;
+        }
 
         size_t get_rank_id() {
             return _rank_id;

@@ -110,7 +110,7 @@ public:
     }
 
     template<typename T>
-    void broadcast_to_rank_sync(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, const std::vector<T>& data) {
+    void broadcast_to_rank_sync(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, std::vector<T>& data) {
         #ifndef IGNORE_DPU_CALLS
         DPU_ASSERT(dpu_broadcast_to(_sets[rank_id], symbol_name, symbol_offset, data.data(), sizeof(T) * data.size(), DPU_XFER_DEFAULT));
         #endif
@@ -155,20 +155,13 @@ public:
 
     void launch_rank_async(size_t rank_id) {
         #ifndef IGNORE_DPU_CALLS
-        if (_do_workload_profiling) {
-            add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
-                auto rankset = static_cast<PimRankSet*>(arg);
-                double now = omp_get_wtime();
-                rankset->_workload_measures[rank_id] += (now - rankset->_workload_begin[rank_id]);
-            });
-        }
         DPU_ASSERT(dpu_launch(_sets[rank_id], DPU_ASYNCHRONOUS));
         #ifdef DO_DPU_PERFCOUNTER
         bool print_perf = true;
         #else
         bool print_perf = false;
         #endif
-        if (_print_dpu_logs || print_perf) { // No need to do this callback if we don't care about logs or perfs
+        if (true || _print_dpu_logs || print_perf) { // No need to do this callback if we don't care about logs or perfs
             add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
                 auto rankset = static_cast<PimRankSet*>(arg);
                 rankset->_rank_finished_callback(rank_id);
@@ -191,22 +184,10 @@ public:
         _do_workload_profiling = true;
     }
 
-    void add_workload_profiling_callback(size_t rank_id) {
-        if (_do_workload_profiling) {
-            add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
-                auto rankset = static_cast<PimRankSet*>(arg);
-                double now = omp_get_wtime();
-                rankset->_workload_begin[rank_id] = now;
-            });
-        }
-    }
-
     void end_workload_profiling() {
         if (_do_workload_profiling) {
             _do_workload_profiling = false;
-            double stop = omp_get_wtime();
             for (size_t rank_id = 0; rank_id < _nb_ranks; rank_id++) {
-                _workload_measures[rank_id] += (stop - _workload_begin[rank_id]);
                 spdlog::info("Rank {} had {} seconds of idle time", rank_id, _workload_measures[rank_id]);
             }
         }
@@ -219,9 +200,23 @@ public:
 
     void lock_rank(size_t rank_id) {
         _rank_mutexes[rank_id].lock();
+        if (_do_workload_profiling) {
+            add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
+                auto rankset = static_cast<PimRankSet*>(arg);
+                double now = omp_get_wtime();
+                rankset->_workload_measures[rank_id] += (now - rankset->_workload_begin[rank_id]);
+            });
+        }
     }
 
      void unlock_rank(size_t rank_id) {
+        if (_do_workload_profiling) {
+            add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
+                auto rankset = static_cast<PimRankSet*>(arg);
+                double now = omp_get_wtime();
+                rankset->_workload_begin[rank_id] = now;
+            });
+        }
         _rank_mutexes[rank_id].unlock();
     }
 

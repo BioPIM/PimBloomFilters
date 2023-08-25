@@ -85,8 +85,8 @@ class PimBloomFilter : public BulkBloomFilter {
 			}
 			
 			std::vector<uint64_t> args{BloomFunction::BLOOM_INIT, _dpu_size2, get_nb_hash()};
-			_pim_rankset.for_each_rank([this, args](size_t rank_id) {
-				_pim_rankset.broadcast_to_rank_sync(rank_id, "args", 0, args);
+			_pim_rankset.for_each_rank([this, &args](size_t rank_id) {
+				_pim_rankset.broadcast_to_rank_sync<uint64_t>(rank_id, "args", 0, args);
 
 				// int nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
 				// auto uids = std::vector<size_t>(nb_dpus_in_rank, 0);
@@ -467,10 +467,6 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			_pim_rankset.launch_rank_async(rank_id);
 
-			#ifdef DO_WORKLOAD_PROFILING
-			_pim_rankset.add_workload_profiling_callback(rank_id);
-			#endif
-
 			_pim_rankset.unlock_rank(rank_id);
 
 			// spdlog::debug("Stacked calls to launch rank {}", rank_id);
@@ -506,10 +502,6 @@ class PimBloomFilter : public BulkBloomFilter {
 					}
 				}
 			});
-
-			#ifdef DO_WORKLOAD_PROFILING
-			_pim_rankset.add_workload_profiling_callback(rank_id);
-			#endif
 
 			_pim_rankset.unlock_rank(rank_id);
 

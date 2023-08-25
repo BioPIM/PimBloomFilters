@@ -40,7 +40,6 @@ int main(int argc, char** argv) {
     size_t nb_items = result["items"].as<size_t>();
 
     bool do_log_perf = result["log"].as<bool>();
-
     auto log_timeit = [&bench_logger, nb_hash, bloom_size2, nb_items, do_log_perf](std::string id) {
         if (do_log_perf) {
             bench_logger->info("{}", get_last_timeit_log(id, nb_hash, bloom_size2, nb_items));

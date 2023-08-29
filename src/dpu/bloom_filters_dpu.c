@@ -15,7 +15,7 @@
 /*                                  Variables                                 */
 /* -------------------------------------------------------------------------- */
 
-#define CACHE8_SIZE 1536
+#define CACHE8_SIZE 2048
 #define CACHE64_SIZE (CACHE8_SIZE >> 3)
 #define CACHE8_BLOOM_SIZE 512
 #define BLOCK_MODULO 4095 // Must be (CACHE8_BLOOM_SIZE * 8) - 1

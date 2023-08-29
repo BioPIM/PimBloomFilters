@@ -161,7 +161,7 @@ public:
         #else
         bool print_perf = false;
         #endif
-        if (true || _print_dpu_logs || print_perf) { // No need to do this callback if we don't care about logs or perfs
+        if (_print_dpu_logs || print_perf) { // No need to do this callback if we don't care about logs or perfs
             add_callback_async(rank_id, this, [](size_t rank_id, void* arg) {
                 auto rankset = static_cast<PimRankSet*>(arg);
                 rankset->_rank_finished_callback(rank_id);
@@ -282,32 +282,18 @@ public:
         struct dpu_set_t _it_dpu = dpu_set_t{};
 	    uint32_t _it_dpu_idx = 0;
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
-            buffer[_it_dpu_idx].resize(length);
-            DPU_ASSERT(dpu_prepare_xfer(_it_dpu, buffer[_it_dpu_idx].data()));
-        }
-        DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_FROM_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));
-        #endif
-        return buffer;
-    }
-
-    template<typename T>
-    void retrieve_vec_data_from_rank_sync(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, size_t length, std::vector<std::vector<T>>& dest) {
-        dest.resize(get_nb_dpu_in_rank(rank_id));
-        #ifndef IGNORE_DPU_CALLS
-        struct dpu_set_t _it_dpu = dpu_set_t{};
-	    uint32_t _it_dpu_idx = 0;
-        DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
             /* ------------------------------- BEGIN HACK ------------------------------- */
             // This is much faster to reserve than resize because nothing is initialized
             // The transfer will set the data
             // BUT the vectors are "officially" empty so cannot iterate on it or use size()
             // Can access with [] but be careful with the index!
-            dest[_it_dpu_idx].reserve(length);
+            buffer[_it_dpu_idx].reserve(length);
             /* -------------------------------- END HACK -------------------------------- */
-            DPU_ASSERT(dpu_prepare_xfer(_it_dpu, dest[_it_dpu_idx].data()));
+            DPU_ASSERT(dpu_prepare_xfer(_it_dpu, buffer[_it_dpu_idx].data()));
         }
         DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_FROM_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));
         #endif
+        return buffer;
     }
 
 private:

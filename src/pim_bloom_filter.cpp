@@ -220,7 +220,7 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			const size_t nb_items = items.size();
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
-			const size_t nb_workers = 6;
+			const size_t nb_workers = 5;
 
 			#ifdef DO_WORKLOAD_PROFILING
 			_pim_rankset.start_workload_profiling();
@@ -503,8 +503,7 @@ class PimBloomFilter : public BulkBloomFilter {
 				_start_callback();
 				auto rankset = static_cast<PimRankSet*>(arg);
 				// double start = omp_get_wtime();
-				std::vector<std::vector<uint64_t>> rank_results;
-				rankset->retrieve_vec_data_from_rank_sync<uint64_t>(rank_id, "args", 0, bucket_length, rank_results);
+				auto rank_results = rankset->get_vec_data_from_rank_sync<uint64_t>(rank_id, "args", 0, bucket_length);
 				// double stop = omp_get_wtime();
 				// spdlog::info("Transfer took {}", stop - start);
 				// start = omp_get_wtime();
@@ -517,6 +516,7 @@ class PimBloomFilter : public BulkBloomFilter {
 				}
 				// stop = omp_get_wtime();
 				// spdlog::info("Writing results took {}", stop - start);
+				_start_callback();
 			});
 
 			_pim_rankset.unlock_rank(rank_id);

@@ -12,6 +12,7 @@
 #include "pim_bloom_filter.cpp"
 
 constexpr size_t NB_THREADS = 8; 
+constexpr size_t NB_NO_ITEMS = 100000;
 
 int main(int argc, char** argv) {
 
@@ -51,6 +52,7 @@ int main(int argc, char** argv) {
     };
 
 	std::vector<uint64_t> items = get_seq_items(nb_items);
+    std::vector<uint64_t> no_items = get_seq_items(NB_NO_ITEMS, nb_items);
 
     spdlog::set_level(spdlog::level::info);
 
@@ -74,6 +76,11 @@ int main(int argc, char** argv) {
 	std::shuffle(std::begin(items), std::end(items), rng);
 	TIMEIT(bloom_filter->contains_bulk(items));
     log_timeit("lookup");
+
+    std::cout << "> Querying non inserted items and checking fpr..." << std::endl;
+    auto lookup_result = bloom_filter->contains_bulk(no_items);
+	double fpr = (double) std::count(lookup_result.begin(), lookup_result.end(), true) / no_items.size();
+    std::cout << "False positive rate is " << fpr << std::endl;
 
     // std::cout << "> Getting data..." << std::endl;
     // std::vector<uint8_t> data;

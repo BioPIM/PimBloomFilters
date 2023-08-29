@@ -16,8 +16,6 @@
 
 #define CACHE8_SIZE 1536
 #define CACHE64_SIZE (CACHE8_SIZE >> 3)
-#define CACHE8_BLOOM_SIZE 512
-#define BLOCK_MODULO 4095 // Must be (CACHE8_BLOOM_SIZE * 8) - 1
 
 // Barriers to sync tasklets
 BARRIER_INIT(all_tasklets_barrier_1, NR_TASKLETS);
@@ -35,7 +33,7 @@ __dma_aligned uint8_t gcache8[CACHE8_SIZE]; // Cache common to all tasklets
 uint64_t* gcache64 = (uint64_t*) gcache8;
 uint64_t _tasklet_results[NR_TASKLETS];
 // MRAM
-__mram_noinit uint8_t _bloom_data[(MAX_BLOOM_DPU_SIZE + CACHE8_BLOOM_SIZE) * NR_TASKLETS];
+__mram_noinit uint8_t _bloom_data[(MAX_BLOOM_DPU_SIZE) * NR_TASKLETS];
 __mram_noinit uint64_t dpu_size2;
 __mram_noinit uint64_t nb_hash;
 
@@ -48,8 +46,6 @@ __mram_noinit uint64_t perf_ref_id;
 /* -------------------------------------------------------------------------- */
 /*                                  Utilities                                 */
 /* -------------------------------------------------------------------------- */
-
-static void insert_atomic(uint8_t *i, uint8_t args) { (*i) |= args; }
 
 static inline uint64_t simplehash16_64(uint64_t item, size_t idx) {
 	uint64_t input = item >> idx;
@@ -89,25 +85,27 @@ int main() {
 
 	/* ----------------------- Compute tasklet useful data ---------------------- */
 
-	__mram_ptr uint8_t* _bloom_tasklets_data[NR_TASKLETS];
-	for (size_t n = 0; n < NR_TASKLETS; n++) {
-		_bloom_tasklets_data[n] = &_bloom_data[(MAX_BLOOM_DPU_SIZE + CACHE8_BLOOM_SIZE) * n];
-	}
-	__mram_ptr uint8_t* _bloom_tasklet_data = _bloom_tasklets_data[me()];
+	__mram_ptr uint8_t* _bloom_tasklet_data = &_bloom_data[(MAX_BLOOM_DPU_SIZE) * me()];
 
 	__dma_aligned uint8_t cache8[CACHE8_SIZE]; // Local cache for each tasklet
 	uint64_t* cache64 = (uint64_t*) cache8;
 
-	__dma_aligned uint8_t cache8_bloom[CACHE8_BLOOM_SIZE]; // Local cache for each tasklet
+	mram_read(args, cache64, CACHE64_SIZE * sizeof(uint64_t));
 
 
 	/* ------------------------------ Call function ----------------------------- */
 
-	switch(args[0]) {
+	switch(cache64[0]) {
 
 		case BLOOM_INIT: {
 
-			size_t _bloom_nb_bytes = (1 << (args[1] - 3));
+			size_t _bloom_nb_bytes = (1 << (cache64[1] - 3));
+			// Store data for future calls
+			if (me() == 0) { // Must be done before filling with 0s because cache64 will be overwritten
+				dpu_size2 = cache64[1];
+				nb_hash = cache64[2];
+				dpu_printf("Filter size2 = %lu\n", dpu_size2);
+			}
 
 			// Basic version: memset in mram, a bit slow
 			// memset(_bloom_tasklet_data, 0, _bloom_nb_bytes * sizeof(uint8_t));
@@ -120,13 +118,6 @@ int main() {
 				} else {
 					mram_write(cache8, &_bloom_tasklet_data[i], CACHE8_SIZE * sizeof(uint8_t));
 				}
-			}
-
-			// Store data for future calls
-			if (me() == 0) {
-				dpu_size2 = args[1];
-				nb_hash = args[2];
-				dpu_printf("Filter size2 = %lu\n", dpu_size2);
 			}
 
 			break;
@@ -159,39 +150,21 @@ int main() {
 
 			uint64_t _dpu_size_reduced = (1 << dpu_size2) - 1;
 			uint64_t wram_nb_hash = nb_hash;
-			
-			uint64_t _nb_items = args[1];
-			
-			// dpu_printf_0("We have %lu items\n", _nb_items);
-			// if (_nb_items > MAX_NB_ITEMS_PER_DPU) {
-			// 	halt(); // This should not happen, there is an error somewhere
-			// }
+			uint64_t _nb_items = cache64[1];
 
-			size_t D = _nb_items >> 4;
-			size_t K = _nb_items & 15;
-
-			size_t start_index = me() * D + (me() < K ? me() : K);
-			size_t stop_index = start_index + D + (me() < K ? 1 : 0);
-			
-			size_t cache_idx = CACHE64_SIZE;
-			for (size_t i = start_index; i < stop_index; i++) {
-				if (cache_idx >= CACHE64_SIZE) {
+			size_t cache_idx = 2;
+			for (size_t i = 0; i < _nb_items; i++) {
+				if (cache_idx == CACHE64_SIZE) {
 					mram_read(&args[i + 2], cache64, CACHE64_SIZE * sizeof(uint64_t));
 					cache_idx = 0;
 				}
 				uint64_t item = cache64[cache_idx];
-				uint64_t h0 = simplehash16_64(item, 0) & _dpu_size_reduced;
-				size_t filter_id = (h0 & 15);
-				size_t h0_idx = (h0 >> 3);
-				mutex_pool_lock(&write_mutex, filter_id);
-				mram_read(&_bloom_tasklets_data[filter_id][h0_idx], cache8_bloom, CACHE8_BLOOM_SIZE * sizeof(uint8_t));
-				cache8_bloom[0] |= bit_mask[h0 & 7];
-				for (size_t k = 1; k < wram_nb_hash; k++) {
-					uint64_t h1 = simplehash16_64(item, k) & BLOCK_MODULO;
-					cache8_bloom[h1 >> 3] |= bit_mask[h1 & 7];
+				if ((simplehash16_64(item, wram_nb_hash) & 15) == me()) {
+					for (size_t k = 0; k < wram_nb_hash; k++) {
+						uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
+						_bloom_tasklet_data[h0 >> 3] |= bit_mask[h0 & 7];
+					}
 				}
-				mram_write(cache8_bloom, &_bloom_tasklets_data[filter_id][h0_idx], CACHE8_BLOOM_SIZE * sizeof(uint8_t));
-				mutex_pool_unlock(&write_mutex, filter_id);
 				cache_idx++;
 			}
 			break;
@@ -202,16 +175,14 @@ int main() {
 
 			uint64_t _dpu_size_reduced = (1 << dpu_size2) - 1;
 			uint64_t wram_nb_hash = nb_hash;
-
 			_tasklet_results[me()] = 0;
-
-			mram_read(args, cache64, CACHE64_SIZE * sizeof(uint64_t));
 			uint64_t _nb_items = cache64[1];
 			
 			// dpu_printf_0("We have %lu items\n", _nb_items);
 			// if (_nb_items > MAX_NB_ITEMS_PER_DPU) {
 			// 	halt(); // This should not happen, there is an error somewhere
 			// }
+			
 			if (me() == 0) {
 				gcache64[0] = _nb_items; // Write number of items in the result because the host will need it
 			}
@@ -230,18 +201,15 @@ int main() {
 				}
 				uint64_t item = cache64[cache_idx];
 				uint64_t h0 = simplehash16_64(item, 0) & _dpu_size_reduced;
-				if ((h0 & 15) == me()) {
-					size_t h0_idx = (h0 >> 3);
-					mram_read(&_bloom_tasklet_data[h0_idx], cache8_bloom, CACHE8_BLOOM_SIZE * sizeof(uint8_t));
-					bool lookup_result = !((cache8_bloom[0] & bit_mask[h0 & 7]) == 0);
-					if (lookup_result) {
-						for (size_t k = 1; k < wram_nb_hash; k++) {
-							uint64_t h1 = simplehash16_64(item, k) & BLOCK_MODULO;
-							if ((cache8_bloom[h1 >> 3] & bit_mask[h1 & 7]) == 0) { lookup_result = false; break; }
-						}
+				if ((simplehash16_64(item, wram_nb_hash) & 15) == me()) {
+					bool lookup_result = true;
+					for (size_t k = 0; k < wram_nb_hash; k++) {
+						uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
+						if ((_bloom_tasklet_data[h0 >> 3] & bit_mask[h0 & 7]) == 0) { lookup_result = false; break; }
 					}
 					gcache64[cache_idx] = lookup_result; // Write result in a global cache
 				}
+
 				cache_idx++;
 			}
 			barrier_wait(&all_tasklets_barrier_1);

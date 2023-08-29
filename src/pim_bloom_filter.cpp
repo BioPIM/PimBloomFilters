@@ -244,6 +244,9 @@ class PimBloomFilter : public BulkBloomFilter {
 			// Editing a vector of bool is not thread-safe even if accessing different cells, so using an intermediate vector
 			auto int_result = std::vector<int>(items.size(), false);
 
+			size_t D = nb_items / nb_workers;
+			size_t K = nb_items % nb_workers;
+
 			#pragma omp parallel num_threads(nb_workers)
 			{
 
@@ -253,7 +256,10 @@ class PimBloomFilter : public BulkBloomFilter {
 				auto &indexes_container = indexes_containers[worker_id];
 				
 				// Consider a partition of the items
-				for (size_t i = worker_id; i < nb_items; i += nb_workers) { // This iteration method seems faster for lookups
+				size_t start_index = worker_id * D + (worker_id < K ? worker_id : K);
+				size_t stop_index = start_index + D + (worker_id < K ? 1 : 0);
+				for (size_t i = start_index; i < stop_index; i++) { // Faster iteration
+				// for (size_t i = worker_id; i < nb_items; i += nb_workers) {
 					const uint64_t &item = items[i];
 					auto dispatch_data = _item_dispatcher.dispatch(item);
 					size_t rank_id = dispatch_data.get_rank_id();
@@ -263,7 +269,7 @@ class PimBloomFilter : public BulkBloomFilter {
 					if (idx != _NO_MAPPING) {
 						auto &buckets = done_container[idx];
 						auto &bucket = buckets[dispatch_data.get_dpu_id()];
-						if ((bucket.size() >= bucket_size)) {
+						if (bucket.size() >= bucket_size) {
 							for (auto &the_bucket : buckets) {
 								the_bucket[1] = the_bucket.size() - 2;
 							}
@@ -331,9 +337,10 @@ class PimBloomFilter : public BulkBloomFilter {
 			_pim_rankset.wait_all_ranks_done();
 
 			// Formatting back into a vector of bool
-            auto result =  std::vector<bool>(int_result.size(), false);
+            auto result =  std::vector<bool>();
+			result.reserve(int_result.size());
             for (size_t i = 0; i < int_result.size(); i++) {
-                result[i] = int_result[i];
+                result.emplace_back(int_result[i]);
             }
 
 			#ifdef DO_WORKLOAD_PROFILING
@@ -493,7 +500,12 @@ class PimBloomFilter : public BulkBloomFilter {
 			// Get results
 			_pim_rankset.add_callback_async(rank_id, &_pim_rankset, [&indexes_buckets, bucket_length, &lookup_results](size_t rank_id, void* arg) {
 				auto rankset = static_cast<PimRankSet*>(arg);
-				auto rank_results = rankset->get_vec_data_from_rank_sync<uint64_t>(rank_id, "args", 0, bucket_length);
+				// double start = omp_get_wtime();
+				std::vector<std::vector<uint64_t>> rank_results;
+				rankset->retrieve_vec_data_from_rank_sync<uint64_t>(rank_id, "args", 0, bucket_length, rank_results);
+				// double stop = omp_get_wtime();
+				// spdlog::info("Transfer took {}", stop - start);
+				// start = omp_get_wtime();
 				for (size_t dpu_id = 0; dpu_id < indexes_buckets.size(); dpu_id++) {
 					auto &indexes_bucket = indexes_buckets[dpu_id];
 					auto &bucket_results = rank_results[dpu_id];
@@ -501,6 +513,8 @@ class PimBloomFilter : public BulkBloomFilter {
 						lookup_results[indexes_bucket[i]] = bucket_results[i + 2];
 					}
 				}
+				// stop = omp_get_wtime();
+				// spdlog::info("Writing results took {}", stop - start);
 			});
 
 			_pim_rankset.unlock_rank(rank_id);

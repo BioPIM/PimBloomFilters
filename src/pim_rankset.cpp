@@ -297,7 +297,13 @@ public:
         struct dpu_set_t _it_dpu = dpu_set_t{};
 	    uint32_t _it_dpu_idx = 0;
         DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
-            dest[_it_dpu_idx].resize(length);
+            /* ------------------------------- BEGIN HACK ------------------------------- */
+            // This is much faster to reserve than resize because nothing is initialized
+            // The transfer will set the data
+            // BUT the vectors are "officially" empty so cannot iterate on it or use size()
+            // Can access with [] but be careful with the index!
+            dest[_it_dpu_idx].reserve(length);
+            /* -------------------------------- END HACK -------------------------------- */
             DPU_ASSERT(dpu_prepare_xfer(_it_dpu, dest[_it_dpu_idx].data()));
         }
         DPU_ASSERT(dpu_push_xfer(_sets[rank_id], DPU_XFER_FROM_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT));

@@ -13,6 +13,7 @@
 // #define DO_WORKLOAD_PROFILING
 
 void __attribute__((optimize(0))) _worker_done() {}
+void __attribute__((optimize(0))) _start_callback() {}
 
 /* -------------------------------------------------------------------------- */
 /*                              Item dispatchers                              */
@@ -497,8 +498,9 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			_pim_rankset.launch_rank_async(rank_id);
 			
-			// Get results
-			_pim_rankset.add_callback_async(rank_id, &_pim_rankset, [&indexes_buckets, bucket_length, &lookup_results](size_t rank_id, void* arg) {
+			// Get results // indexes_buckets should not be a reference otherwise gives a seg fault for some reason
+			_pim_rankset.add_callback_async(rank_id, &_pim_rankset, [indexes_buckets, bucket_length, &lookup_results](size_t rank_id, void* arg) {
+				_start_callback();
 				auto rankset = static_cast<PimRankSet*>(arg);
 				// double start = omp_get_wtime();
 				std::vector<std::vector<uint64_t>> rank_results;

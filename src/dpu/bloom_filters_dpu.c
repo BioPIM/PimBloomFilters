@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "bloom_filters_dpu.h"
+#include "murmur3.h"
 
 
 /* -------------------------------------------------------------------------- */
@@ -16,6 +17,8 @@
 
 #define CACHE8_SIZE 1536
 #define CACHE64_SIZE (CACHE8_SIZE >> 3)
+#define CACHE8_BLOOM_SIZE 512
+#define BLOCK_MODULO 4095 // Must be (CACHE8_BLOOM_SIZE * 8) - 1
 
 // Barriers to sync tasklets
 BARRIER_INIT(all_tasklets_barrier_1, NR_TASKLETS);
@@ -48,11 +51,18 @@ __mram_noinit uint64_t perf_ref_id;
 /* -------------------------------------------------------------------------- */
 
 static inline uint64_t simplehash16_64(uint64_t item, size_t idx) {
-	uint64_t input = item >> idx;
-	uint64_t res = random_values[input & 255];
-	input = input >> 8;
-	res  ^= random_values[input & 255];
-	return res;
+	uint64_t i = item >> idx;
+    uint16_t hash = (uint16_t)(i & 0xFFFF);
+    hash ^= (uint16_t)((i >> 16) & 0xFFFF);
+    hash ^= (uint16_t)((i >> 32) & 0xFFFF);
+    hash ^= (uint16_t)((i >> 48) & 0xFFFF);
+    return (uint64_t) hash;
+}
+
+static inline uint64_t hash64(uint64_t key) {
+	uint64_t hash = 0;
+	MurmurHash3_x86_32(&key, sizeof(uint64_t), 0, &hash);
+	return hash;
 }
 
 static inline void reduce_all_results() {
@@ -85,10 +95,17 @@ int main() {
 
 	/* ----------------------- Compute tasklet useful data ---------------------- */
 
-	__mram_ptr uint8_t* _bloom_tasklet_data = &_bloom_data[(MAX_BLOOM_DPU_SIZE) * me()];
+	__mram_ptr uint8_t* _bloom_tasklets_data[NR_TASKLETS];
+	for (size_t n = 0; n < NR_TASKLETS; n++) {
+		_bloom_tasklets_data[n] = &_bloom_data[(MAX_BLOOM_DPU_SIZE + CACHE8_BLOOM_SIZE) * n];
+	}
+	__mram_ptr uint8_t* _bloom_tasklet_data = _bloom_tasklets_data[me()];
+
 
 	__dma_aligned uint8_t cache8[CACHE8_SIZE]; // Local cache for each tasklet
 	uint64_t* cache64 = (uint64_t*) cache8;
+
+	__dma_aligned uint8_t cache8_bloom[CACHE8_BLOOM_SIZE]; // Local cache for each tasklet
 
 	mram_read(args, cache64, CACHE64_SIZE * sizeof(uint64_t));
 
@@ -152,19 +169,31 @@ int main() {
 			uint64_t wram_nb_hash = nb_hash;
 			uint64_t _nb_items = cache64[1];
 
-			size_t cache_idx = 2;
-			for (size_t i = 0; i < _nb_items; i++) {
-				if (cache_idx == CACHE64_SIZE) {
+			size_t D = _nb_items >> 4;
+			size_t K = _nb_items & 15;
+
+			size_t start_index = me() * D + (me() < K ? me() : K);
+			size_t stop_index = start_index + D + (me() < K ? 1 : 0);
+			
+			size_t cache_idx = CACHE64_SIZE;
+			for (size_t i = start_index; i < stop_index; i++) {
+				if (cache_idx >= CACHE64_SIZE) {
 					mram_read(&args[i + 2], cache64, CACHE64_SIZE * sizeof(uint64_t));
 					cache_idx = 0;
 				}
 				uint64_t item = cache64[cache_idx];
-				if ((simplehash16_64(item, wram_nb_hash) & 15) == me()) {
-					for (size_t k = 0; k < wram_nb_hash; k++) {
-						uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
-						_bloom_tasklet_data[h0 >> 3] |= bit_mask[h0 & 7];
-					}
+				uint64_t h0 = hash64(item) & _dpu_size_reduced;
+				size_t filter_id = (simplehash16_64(item, 0) & 15);
+				size_t h0_idx = (h0 >> 3);
+				mutex_pool_lock(&write_mutex, filter_id);
+				mram_read(&_bloom_tasklets_data[filter_id][h0_idx], cache8_bloom, CACHE8_BLOOM_SIZE * sizeof(uint8_t));
+				cache8_bloom[0] |= bit_mask[h0 & 7];
+				for (size_t k = 1; k < wram_nb_hash; k++) {
+					uint64_t h1 = simplehash16_64(item, k) & BLOCK_MODULO;
+					cache8_bloom[h1 >> 3] |= bit_mask[h1 & 7];
 				}
+				mram_write(cache8_bloom, &_bloom_tasklets_data[filter_id][h0_idx], CACHE8_BLOOM_SIZE * sizeof(uint8_t));
+				mutex_pool_unlock(&write_mutex, filter_id);
 				cache_idx++;
 			}
 			break;
@@ -200,12 +229,16 @@ int main() {
 					cache_idx = 0;
 				}
 				uint64_t item = cache64[cache_idx];
-				uint64_t h0 = simplehash16_64(item, 0) & _dpu_size_reduced;
-				if ((simplehash16_64(item, wram_nb_hash) & 15) == me()) {
-					bool lookup_result = true;
-					for (size_t k = 0; k < wram_nb_hash; k++) {
-						uint64_t h0 = simplehash16_64(item, k) & _dpu_size_reduced;
-						if ((_bloom_tasklet_data[h0 >> 3] & bit_mask[h0 & 7]) == 0) { lookup_result = false; break; }
+				if ((simplehash16_64(item, 0) & 15) == me()) {
+					uint64_t h0 = hash64(item) & _dpu_size_reduced;
+					size_t h0_idx = (h0 >> 3);
+					mram_read(&_bloom_tasklet_data[h0_idx], cache8_bloom, CACHE8_BLOOM_SIZE * sizeof(uint8_t));
+					bool lookup_result = !((cache8_bloom[0] & bit_mask[h0 & 7]) == 0);
+					if (lookup_result) {
+						for (size_t k = 1; k < wram_nb_hash; k++) {
+							uint64_t h1 = simplehash16_64(item, k) & BLOCK_MODULO;
+							if ((cache8_bloom[h1 >> 3] & bit_mask[h1 & 7]) == 0) { lookup_result = false; break; }
+						}
 					}
 					gcache64[cache_idx] = lookup_result; // Write result in a global cache
 				}

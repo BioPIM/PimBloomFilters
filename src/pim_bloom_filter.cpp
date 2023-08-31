@@ -72,7 +72,6 @@ class PimBloomFilter : public BulkBloomFilter {
 			}
 
 			_dpu_size2 = ceil(log(_get_size() / (_pim_rankset.get_nb_dpu() * NR_TASKLETS)) / log(2));
-			
 			// spdlog::info("dpu_size2 is {}", _dpu_size2);
 
 			if (_dpu_size2  > (MAX_BLOOM_DPU_SIZE2 + 3)) {
@@ -88,14 +87,6 @@ class PimBloomFilter : public BulkBloomFilter {
 			std::vector<uint64_t> args{BloomFunction::BLOOM_INIT, _dpu_size2, get_nb_hash()};
 			_pim_rankset.for_each_rank([this, &args](size_t rank_id) {
 				_pim_rankset.broadcast_to_rank_sync<uint64_t>(rank_id, "args", 0, args);
-
-				// int nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
-				// auto uids = std::vector<size_t>(nb_dpus_in_rank, 0);
-				// for (int i = 0; i < nb_dpus_in_rank; i++) {
-				// 	uids[i] = DPU_UID(rank_id, i);
-				// }
-				// _pim_rankset.send_data_to_rank_sync(rank_id, "dpu_uid", 0, uids, sizeof(size_t));
-
 				_pim_rankset.launch_rank_sync(rank_id);
 			}, true);
 
@@ -119,10 +110,11 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			auto done_containers = std::vector<std::vector<std::vector<std::vector<uint64_t>>>>(nb_workers);
 
-			// Buckets will not be full all the same time and rank gets launched at first bucket full, so increase the optimal repartition by 50% to get an upper bound estimation
-			size_t estimated_size = nb_items / (_pim_rankset.get_nb_dpu() * max_nb_items_per_bucket * nb_workers) * nb_ranks * 1.5;
+			// Buckets will not be full all the same time and rank gets launched at first bucket full, so consider the optimal repartition
+			// and increase it by 100% because we need to be sure no reallocation ever happens otherwise it will invalidate all references given to callbacks
+			size_t estimated_size = nb_items / (_pim_rankset.get_nb_dpu() * max_nb_items_per_bucket * nb_workers) * nb_ranks * 2.0;
 
-			for (auto done_container : done_containers) {
+			for (auto &done_container : done_containers) {
 				done_container.reserve(estimated_size);
 			}
 
@@ -164,8 +156,7 @@ class PimBloomFilter : public BulkBloomFilter {
 					if (idx == _NO_MAPPING) {
 						idx = done_container.size();
 						buckets_done_idx[rank_id] = idx;
-						done_container.emplace_back();
-						auto &buckets = done_container.back();
+						auto &buckets = done_container.emplace_back();
 						size_t nb_dpu_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
 						buckets.reserve(nb_dpu_in_rank);
 						buckets.resize(nb_dpu_in_rank);
@@ -340,8 +331,8 @@ class PimBloomFilter : public BulkBloomFilter {
 			// Formatting back into a vector of bool
             auto result =  std::vector<bool>();
 			result.reserve(int_result.size());
-            for (size_t i = 0; i < int_result.size(); i++) {
-                result.emplace_back(int_result[i]);
+            for (auto value : int_result) {
+                result.emplace_back(value);
             }
 
 			#ifdef DO_WORKLOAD_PROFILING
@@ -360,20 +351,17 @@ class PimBloomFilter : public BulkBloomFilter {
 			uint64_t weight = 0;
 			std::mutex weight_mutex;
 
-			auto callback = [&weight, &weight_mutex](size_t rank_id, void* arg) {
-				auto rankset = static_cast<PimRankSet*>(arg);
-				auto result = rankset->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "result", 0, sizeof(uint64_t));
-				weight_mutex.lock();
-				weight += result;
-				weight_mutex.unlock();
-			};
-
 			auto args = std::vector<uint64_t>{BloomFunction::BLOOM_WEIGHT};
 
-			_pim_rankset.for_each_rank([this, &callback, &args](size_t rank_id) {
+			_pim_rankset.for_each_rank([&weight, &weight_mutex, this, &args](size_t rank_id) {
 				_pim_rankset.broadcast_to_rank_async(rank_id, "args", 0, args);
 				_pim_rankset.launch_rank_async(rank_id);
-				_pim_rankset.add_callback_async(rank_id, &_pim_rankset, callback);
+				_pim_rankset.add_callback_async(rank_id, [&weight, &weight_mutex, this, rank_id]() {
+					auto result = _pim_rankset.get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "result", 0, sizeof(uint64_t));
+					weight_mutex.lock();
+					weight += result;
+					weight_mutex.unlock();
+				});
 			}, true);
 
 			_pim_rankset.wait_all_ranks_done();
@@ -387,11 +375,14 @@ class PimBloomFilter : public BulkBloomFilter {
 			// So the data returned takes (a lot) more storage than it could
 			// But works fine this way for now
 			_bloom_data.resize(0);
-			_bloom_data.reserve(MAX_BLOOM_DPU_SIZE * NR_TASKLETS * _pim_rankset.get_nb_dpu());
-			_pim_rankset.for_each_rank([this](size_t rank_id) {
-				auto rank_data = _pim_rankset.get_vec_data_from_rank_sync<uint8_t>(rank_id, "_bloom_data", 0, MAX_BLOOM_DPU_SIZE * NR_TASKLETS * sizeof(uint8_t));
+			_bloom_data.reserve(TOTAL_MAX_BLOOM_DPU_SIZE * NR_TASKLETS * _pim_rankset.get_nb_dpu());
+			size_t nb_elements = TOTAL_MAX_BLOOM_DPU_SIZE * NR_TASKLETS;
+			size_t length = nb_elements * sizeof(uint8_t);
+			_pim_rankset.for_each_rank([&nb_elements, &length, this](size_t rank_id) {
+				auto rank_data = _pim_rankset.get_vec_data_from_rank_sync<uint8_t>(rank_id, "_bloom_data", 0, length);
 				for (auto &dpu_data : rank_data) {
-					std::move(dpu_data.begin(), dpu_data.end(), std::back_inserter(_bloom_data));
+					// Cannot use dpu_data.end() iterator since size is empty (cf HACK in get_vec_data_from_rank_sync)
+					std::move(dpu_data.begin(), dpu_data.begin() + nb_elements, std::back_inserter(_bloom_data)); 
 				}
 			}, false); // Sequential because we need the order to be deterministic
 			return _bloom_data;
@@ -400,15 +391,17 @@ class PimBloomFilter : public BulkBloomFilter {
 		void set_data(const std::vector<uint8_t>& data) override {
 			size_t start_index = 0;
 			auto rank_buffers = std::vector<std::vector<std::vector<uint8_t>>>(_pim_rankset.get_nb_ranks());
-			_pim_rankset.for_each_rank([this, &start_index, &data, &rank_buffers](size_t rank_id) {
+			size_t nb_elements = TOTAL_MAX_BLOOM_DPU_SIZE * NR_TASKLETS;
+			size_t length = nb_elements * sizeof(uint8_t);
+			_pim_rankset.for_each_rank([this, &nb_elements, &length, &start_index, &data, &rank_buffers](size_t rank_id) {
 				size_t nb_dpu_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
 				auto &buffers = rank_buffers[rank_id];
 				buffers.resize(nb_dpu_in_rank);
 				for (size_t dpu_id = 0; dpu_id < nb_dpu_in_rank; dpu_id++) {
-					buffers[dpu_id].assign(data.begin() + start_index, data.begin() + start_index + MAX_BLOOM_DPU_SIZE * NR_TASKLETS);
-					start_index += MAX_BLOOM_DPU_SIZE * NR_TASKLETS;
+					buffers[dpu_id].assign(data.begin() + start_index, data.begin() + start_index + nb_elements);
+					start_index += nb_elements;
 				}
-				_pim_rankset.send_data_to_rank_async<uint8_t>(rank_id, "_bloom_data", 0, buffers , MAX_BLOOM_DPU_SIZE * NR_TASKLETS * sizeof(uint8_t));
+				_pim_rankset.send_data_to_rank_async<uint8_t>(rank_id, "_bloom_data", 0, buffers , length);
 			}, false); // Sequential because we need to restore in the same order it was got (but calls can be async)
 			_pim_rankset.wait_all_ranks_done();
         }
@@ -419,30 +412,6 @@ class PimBloomFilter : public BulkBloomFilter {
 		size_t _dpu_size2;
 		HashPimItemDispatcher _item_dispatcher;
 		std::vector<uint8_t> _bloom_data;
-
-		class LaunchStatistics {
-
-			public:
-
-				void incr_rounds(size_t more_items) {
-					_update_mutex.lock();
-					_items_handled += more_items;
-					_rounds_lauched++;
-					_update_mutex.unlock();
-				}
-
-				void print() {
-					spdlog::debug("Launched {} rounds and handled {} items", _rounds_lauched, _items_handled);
-				}
-
-			private:
-
-				std::mutex _update_mutex;
-
-				size_t _rounds_lauched = 0;
-				size_t _items_handled = 0;
-			
-		};
 
 		const std::string get_dpu_binary_name() {
 			return std::string(DPU_BINARIES_DIR) + "/bloom_filters_dpu";
@@ -455,38 +424,12 @@ class PimBloomFilter : public BulkBloomFilter {
 			_pim_rankset.lock_rank(rank_id); // Lock so that other workers don't stack async calls in-between
 
 			_pim_rankset.send_data_to_rank_async<uint64_t>(rank_id, "args", 0, buckets, bucket_length);
-
-			// Error checking for number of items
-			// uint64_t items_sent = 0;
-			// for (auto &bucket : buckets) {
-			// 	items_sent += bucket[0];
-			// }
-
-			// _pim_rankset.add_callback_async(rank_id, &_pim_rankset, [items_sent](size_t rank_id, void* arg) {
-			// 	auto rankset = static_cast<PimRankSet*>(arg);
-			// 	auto items_received = rankset->get_reduced_sum_from_rank_sync<uint64_t>(rank_id, "items", 0, sizeof(uint64_t));
-			// 	if (items_sent != items_received) {
-			// 		spdlog::error("Rank {}: DPUs received {} items instead of {} (diff = {})", rank_id, items_received, items_sent, (items_received - items_sent));
-			// 	} else {
-			// 		spdlog::debug("Rank {}: DPUs received the right amount of items ({})", rank_id, items_received);
-			// 	}
-			// });
-			// ----------------- //
-
+			_pim_rankset.add_callback_async(rank_id, [&buckets]() {
+				buckets.clear(); // Slightly faster to clear memory as soon as possible
+			});
 			_pim_rankset.launch_rank_async(rank_id);
 
 			_pim_rankset.unlock_rank(rank_id);
-
-			// spdlog::debug("Stacked calls to launch rank {}", rank_id);
-
-			// (void) statistics;
-			// if (spdlog::default_logger_raw()->level() == spdlog::level::debug) {
-			// 	uint64_t items_sent = 0;
-			// 	for (auto &bucket : buckets) {
-			// 		items_sent += bucket[1];
-			// 	}
-			// 	statistics.incr_rounds(items_sent);
-			// }
 
 		}
 
@@ -499,11 +442,10 @@ class PimBloomFilter : public BulkBloomFilter {
 			_pim_rankset.launch_rank_async(rank_id);
 			
 			// Get results // indexes_buckets should not be a reference otherwise gives a seg fault for some reason
-			_pim_rankset.add_callback_async(rank_id, &_pim_rankset, [indexes_buckets, bucket_length, &lookup_results](size_t rank_id, void* arg) {
+			_pim_rankset.add_callback_async(rank_id, [indexes_buckets, bucket_length, &lookup_results, this, rank_id]() {
 				_start_callback();
-				auto rankset = static_cast<PimRankSet*>(arg);
 				// double start = omp_get_wtime();
-				auto rank_results = rankset->get_vec_data_from_rank_sync<uint64_t>(rank_id, "args", 0, bucket_length);
+				auto rank_results = _pim_rankset.get_vec_data_from_rank_sync<uint64_t>(rank_id, "args", 0, bucket_length);
 				// double stop = omp_get_wtime();
 				// spdlog::info("Transfer took {}", stop - start);
 				// start = omp_get_wtime();

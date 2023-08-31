@@ -233,9 +233,10 @@ class BucketIterativeBloomFilter : public IBloomFilter {
             }
 
             // Formatting back into a vector of bool
-            auto result =  std::vector<bool>(int_result.size(), false);
-            for (size_t i = 0; i < int_result.size(); i++) {
-                result[i] = int_result[i];
+            auto result =  std::vector<bool>();
+			result.reserve(int_result.size());
+            for (auto value : int_result) {
+                result.emplace_back(value);
             }
 
             return result;

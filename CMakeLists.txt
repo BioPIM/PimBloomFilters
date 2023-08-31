@@ -17,7 +17,7 @@ set(CMAKE_BUILD_TYPE Release)
 
 set(TASKLETS "16")
 
-option(FSANITIZE "Compile with fsanitize=address flags")
+set(FSANITIZE OFF)
 
 # ------------------------------------------------------------------------------
 #                                Add directories                                

@@ -17,7 +17,6 @@
 
 #define CACHE8_SIZE 2048
 #define CACHE64_SIZE (CACHE8_SIZE >> 3)
-#define CACHE8_BLOOM_SIZE 512
 #define BLOCK_MODULO 4095 // Must be (CACHE8_BLOOM_SIZE * 8) - 1
 
 // Barriers to sync tasklets
@@ -36,7 +35,7 @@ __dma_aligned uint8_t gcache8[CACHE8_SIZE]; // Cache common to all tasklets
 uint64_t* gcache64 = (uint64_t*) gcache8;
 uint64_t _tasklet_results[NR_TASKLETS];
 // MRAM
-__mram_noinit uint8_t _bloom_data[(MAX_BLOOM_DPU_SIZE) * NR_TASKLETS];
+__mram_noinit uint8_t _bloom_data[TOTAL_MAX_BLOOM_DPU_SIZE * NR_TASKLETS];
 __mram_noinit uint64_t dpu_size2;
 __mram_noinit uint64_t nb_hash;
 
@@ -97,7 +96,7 @@ int main() {
 
 	__mram_ptr uint8_t* _bloom_tasklets_data[NR_TASKLETS];
 	for (size_t n = 0; n < NR_TASKLETS; n++) {
-		_bloom_tasklets_data[n] = &_bloom_data[(MAX_BLOOM_DPU_SIZE + CACHE8_BLOOM_SIZE) * n];
+		_bloom_tasklets_data[n] = &_bloom_data[TOTAL_MAX_BLOOM_DPU_SIZE * n];
 	}
 	__mram_ptr uint8_t* _bloom_tasklet_data = _bloom_tasklets_data[me()];
 

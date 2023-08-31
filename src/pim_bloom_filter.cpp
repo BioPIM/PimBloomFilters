@@ -101,7 +101,6 @@ class PimBloomFilter : public BulkBloomFilter {
 			#ifdef DO_WORKLOAD_PROFILING
 			_pim_rankset.start_workload_profiling();
 			std::vector<double> workers_measures(nb_workers);
-
 			#endif
 			
 			const size_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU;
@@ -110,9 +109,10 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			auto done_containers = std::vector<std::vector<std::vector<std::vector<uint64_t>>>>(nb_workers);
 
+			// IMPORTANT: program will likely crash if estimation here is lower than the actual count
 			// Buckets will not be full all the same time and rank gets launched at first bucket full, so consider the optimal repartition
 			// and increase it by 100% because we need to be sure no reallocation ever happens otherwise it will invalidate all references given to callbacks
-			size_t estimated_size = nb_items / (_pim_rankset.get_nb_dpu() * max_nb_items_per_bucket * nb_workers) * nb_ranks * 2.0;
+			size_t estimated_size = (1.0 + nb_items / (_pim_rankset.get_nb_dpu() * max_nb_items_per_bucket * nb_workers)) * nb_ranks * 2.0;
 
 			for (auto &done_container : done_containers) {
 				done_container.reserve(estimated_size);
@@ -146,7 +146,6 @@ class PimBloomFilter : public BulkBloomFilter {
 							// Set final size here instead of updating at each push_back to avoid writing to cells very far away each time
 							for (auto &the_bucket : buckets) {
 								the_bucket[1] = the_bucket.size() - 2;
-								// spdlog::info("Bucket has {} items for max capacity of {}", the_bucket.size(), bucket_size);
 							}
 							_insert_launch(rank_id, buckets, bucket_length);
 							idx = _NO_MAPPING; // These buckets are launched, forget the mapping so that other buckets get created later
@@ -186,12 +185,10 @@ class PimBloomFilter : public BulkBloomFilter {
 
 				#ifdef DO_WORKLOAD_PROFILING
 				workers_measures[worker_id] = omp_get_wtime();
+				_worker_done(); // Call to see on trace when workers are done
 				#endif
 
 				// spdlog::info("Worker {} did {} launches", worker_id, done_container.size());
-
-				// Call to see on trace when workers are done
-				// _worker_done();
 				
 			}
 			
@@ -223,14 +220,15 @@ class PimBloomFilter : public BulkBloomFilter {
 			const size_t bucket_length = sizeof(uint64_t) * bucket_size;
 
 			auto done_containers = std::vector<std::vector<std::vector<std::vector<uint64_t>>>>(nb_workers);
-			auto indexes_containers = std::vector<std::vector<std::vector<std::vector<size_t>>>>(nb_workers);
 			
-			// Buckets will not be full all the same time and rank gets launched at first bucket full, so increase the optimal repartition by 50% to get an upper bound estimation
-			size_t estimated_size = nb_items / (_pim_rankset.get_nb_dpu() * max_nb_items_per_bucket * nb_workers) * nb_ranks * 1.5;
+			// IMPORTANT: program will likely crash if estimation here is lower than the actual count
+			// Buckets will not be full all the same time and rank gets launched at first bucket full, so consider the optimal repartition
+			// and increase it by 100% because we need to be sure no reallocation ever happens otherwise it will invalidate all references given to callbacks
+			// Estimation is x2 compared to insert_bulk because we store twice more per launch (items + indexes)
+			size_t estimated_size = (1.0 + nb_items / (_pim_rankset.get_nb_dpu() * max_nb_items_per_bucket * nb_workers)) * nb_ranks * 4.0;
 			
-			for (size_t i = 0; i < done_containers.size(); i++) {
-				done_containers[i].reserve(estimated_size);
-				indexes_containers[i].reserve(estimated_size);
+			for (auto &done_container : done_containers) {
+				done_container.reserve(estimated_size);
 			}
 
 			// Editing a vector of bool is not thread-safe even if accessing different cells, so using an intermediate vector
@@ -245,7 +243,6 @@ class PimBloomFilter : public BulkBloomFilter {
 				size_t worker_id = omp_get_thread_num();
 				auto buckets_done_idx = std::vector<size_t>(nb_ranks, _NO_MAPPING);
 				auto &done_container = done_containers[worker_id];
-				auto &indexes_container = indexes_containers[worker_id];
 				
 				// Consider a partition of the items
 				size_t start_index = worker_id * D + (worker_id < K ? worker_id : K);
@@ -265,7 +262,7 @@ class PimBloomFilter : public BulkBloomFilter {
 							for (auto &the_bucket : buckets) {
 								the_bucket[1] = the_bucket.size() - 2;
 							}
-							auto &indexes_buckets = indexes_container[idx];
+							auto &indexes_buckets = done_container[idx + 1];
 							_contains_launch(rank_id, buckets, bucket_length, int_result, indexes_buckets);
 							idx = _NO_MAPPING; // These buckets are launched, forget the mapping so that other buckets get created later
 						}
@@ -274,10 +271,8 @@ class PimBloomFilter : public BulkBloomFilter {
 					if (idx == _NO_MAPPING) {
 						idx = done_container.size();
 						buckets_done_idx[rank_id] = idx;
-						done_container.emplace_back();
-						indexes_container.emplace_back();
-						auto &buckets = done_container.back();
-						auto &indexes_buckets = indexes_container.back();
+						auto &buckets = done_container.emplace_back();
+						auto &indexes_buckets = done_container.emplace_back();
 						size_t nb_dpus_in_rank = _pim_rankset.get_nb_dpu_in_rank(rank_id);
 						buckets.reserve(nb_dpus_in_rank);
 						buckets.resize(nb_dpus_in_rank);
@@ -293,7 +288,7 @@ class PimBloomFilter : public BulkBloomFilter {
 					}
 					
 					auto &buckets = done_container[idx];
-					auto &indexes_buckets = indexes_container[idx];
+					auto &indexes_buckets = done_container[idx + 1];
 					size_t bucket_idx = dispatch_data.get_dpu_id();
 					auto &bucket = buckets[bucket_idx];
 					auto &indexes_bucket = indexes_buckets[bucket_idx];
@@ -307,7 +302,7 @@ class PimBloomFilter : public BulkBloomFilter {
 					auto idx = buckets_done_idx[rank_id];
 					if (idx != _NO_MAPPING) {
 						auto &buckets = done_container[idx];
-						auto &indexes_buckets = indexes_container[idx];
+						auto &indexes_buckets = done_container[idx + 1];
 						for (auto &the_bucket : buckets) {
 							the_bucket[1] = the_bucket.size() - 2;
 						}
@@ -317,12 +312,10 @@ class PimBloomFilter : public BulkBloomFilter {
 
 				#ifdef DO_WORKLOAD_PROFILING
 				workers_measures[worker_id] = omp_get_wtime();
+				_worker_done(); // Call to see on trace when workers are done
 				#endif
 
 				// spdlog::info("Worker {} did {} launches", worker_id, done_container.size());
-
-				// Call to see on trace when workers are done
-				// _worker_done();
 				
 			}
 			
@@ -438,12 +431,12 @@ class PimBloomFilter : public BulkBloomFilter {
 			_pim_rankset.lock_rank(rank_id); // Lock so that other workers don't stack async calls in-between
 
 			_pim_rankset.send_data_to_rank_async<uint64_t>(rank_id, "args", 0, buckets, bucket_length);
-
+			_pim_rankset.add_callback_async(rank_id, [&buckets]() {
+				buckets.clear(); // Slightly faster to clear memory as soon as possible
+			});
 			_pim_rankset.launch_rank_async(rank_id);
-			
-			// Get results // indexes_buckets should not be a reference otherwise gives a seg fault for some reason
-			_pim_rankset.add_callback_async(rank_id, [indexes_buckets, bucket_length, &lookup_results, this, rank_id]() {
-				_start_callback();
+			_pim_rankset.add_callback_async(rank_id, [&indexes_buckets, bucket_length, &lookup_results, this, rank_id]() { // Get results
+				// _start_callback();
 				// double start = omp_get_wtime();
 				auto rank_results = _pim_rankset.get_vec_data_from_rank_sync<uint64_t>(rank_id, "args", 0, bucket_length);
 				// double stop = omp_get_wtime();
@@ -456,14 +449,13 @@ class PimBloomFilter : public BulkBloomFilter {
 						lookup_results[indexes_bucket[i]] = bucket_results[i + 2];
 					}
 				}
+				indexes_buckets.clear(); // Slightly faster to clear memory as soon as possible
 				// stop = omp_get_wtime();
 				// spdlog::info("Writing results took {}", stop - start);
-				_start_callback();
+				// _start_callback();
 			});
 
 			_pim_rankset.unlock_rank(rank_id);
-
-			// spdlog::debug("Stacked calls to launch rank {}", rank_id);
 
 		}
 

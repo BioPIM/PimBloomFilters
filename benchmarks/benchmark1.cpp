@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
     size_t nb_hash = result["hash"].as<size_t>();
     size_t bloom_size2 = result["size2"].as<size_t>();
     size_t nb_items = result["items"].as<size_t>();
-    DpuProfile dpu_profile = result["simulator"].as<bool>() ? DpuProfile::SIMULATOR : DpuProfile::HARDWARE;
+    auto dpu_profile = DpuProfile().set_backend(result["simulator"].as<bool>() ? DpuProfile::Backend::SIMULATOR : DpuProfile::Backend::HARDWARE);
 
     bool do_log_perf = result["log"].as<bool>();
     auto log_timeit = [&bench_logger, nb_hash, bloom_size2, nb_items, nb_ranks, do_log_perf](std::string id) {
@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
     std::cout << "> Querying non inserted items and checking fpr..." << std::endl;
     auto lookup_result = bloom_filter->contains_bulk(no_items);
 	double fpr = (double) std::count(lookup_result.begin(), lookup_result.end(), true) / no_items.size();
+    last_timeit_measure = fpr; log_timeit("fpr"); // Not very clean but works fine
     std::cout << "False positive rate is " << fpr << std::endl;
 
     // std::cout << "> Getting data..." << std::endl;

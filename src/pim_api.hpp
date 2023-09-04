@@ -33,8 +33,12 @@ public:
     void dpu_alloc([[maybe_unused]] uint32_t nr_dpus, [[maybe_unused]] const char *profile, [[maybe_unused]] struct dpu_set_t *dpu_set) {}
     void dpu_alloc_ranks([[maybe_unused]] uint32_t nr_ranks, [[maybe_unused]] const char *profile, [[maybe_unused]] struct dpu_set_t *dpu_set) {}
     void dpu_free([[maybe_unused]] struct dpu_set_t dpu_set) {}
-    void dpu_get_nr_ranks([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] uint32_t *nr_ranks) { *nr_ranks = 1; }
-    void dpu_get_nr_dpus([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] uint32_t *nr_dpus) { *nr_dpus = 64; }
+    void dpu_get_nr_ranks([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] uint32_t *nr_ranks) {
+        *nr_ranks = 1;
+    }
+    void dpu_get_nr_dpus([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] uint32_t *nr_dpus) {
+        *nr_dpus = 64;
+    }
     void dpu_load([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] const char *binary_path, [[maybe_unused]] struct dpu_program_t **program) {}
     void dpu_launch([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] dpu_launch_policy_t policy) {}
     void dpu_status([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] bool *done, [[maybe_unused]] bool *fault) { *done = true; *fault = false; }
@@ -44,7 +48,9 @@ public:
     void dpu_prepare_xfer([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] void *buffer) {}
     void dpu_push_xfer([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] dpu_xfer_t xfer, [[maybe_unused]] const char *symbol_name, [[maybe_unused]] uint32_t symbol_offset, [[maybe_unused]] size_t length, [[maybe_unused]] dpu_xfer_flags_t flags) {}
     void dpu_broadcast_to([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] const char *symbol_name, [[maybe_unused]] uint32_t symbol_offset, [[maybe_unused]] const void *src, [[maybe_unused]] size_t length, [[maybe_unused]] dpu_xfer_flags_t flags) {}
-    void dpu_callback([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] dpu_error_t (*callback)(struct dpu_set_t, [[maybe_unused]] uint32_t, void *), [[maybe_unused]] void *args, [[maybe_unused]] dpu_callback_flags_t flags) {}
+    void dpu_callback([[maybe_unused]] struct dpu_set_t dpu_set, [[maybe_unused]] dpu_error_t (*callback)(struct dpu_set_t, [[maybe_unused]] uint32_t, void *), [[maybe_unused]] void *args, [[maybe_unused]] dpu_callback_flags_t flags) {
+        DPU_ASSERT((*callback)(dpu_set, 0, args));
+    }
     void dpu_log_read([[maybe_unused]] struct dpu_set_t set, [[maybe_unused]] FILE *stream) {}
 
 };

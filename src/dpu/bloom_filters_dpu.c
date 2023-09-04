@@ -203,7 +203,6 @@ int main() {
 
 			uint64_t _dpu_size_reduced = (1 << dpu_size2) - 1;
 			uint64_t wram_nb_hash = nb_hash;
-			_tasklet_results[me()] = 0;
 			uint64_t _nb_items = cache64[1];
 			
 			// dpu_printf_0("We have %lu items\n", _nb_items);
@@ -222,7 +221,7 @@ int main() {
 					if (me() == 0) {
 						mram_write(gcache64, &args[current_start_idx], CACHE64_SIZE * sizeof(uint64_t));
 					}
-					barrier_wait(&all_tasklets_barrier_2); // Can go again
+					barrier_wait(&all_tasklets_barrier_2); // Can go again after that
 					current_start_idx += CACHE64_SIZE;
 					mram_read(&args[current_start_idx], cache64, CACHE64_SIZE * sizeof(uint64_t));
 					cache_idx = 0;
@@ -241,13 +240,11 @@ int main() {
 					}
 					gcache64[cache_idx] = lookup_result; // Write result in a global cache
 				}
-
 				cache_idx++;
 			}
 			barrier_wait(&all_tasklets_barrier_1);
 			if (me() == 0) {
-				// Write last part
-				mram_write(gcache64, &args[current_start_idx], CACHE64_SIZE * sizeof(uint64_t));
+				mram_write(gcache64, &args[current_start_idx], CACHE64_SIZE * sizeof(uint64_t)); // Write last part
 			}
 			break;
 		}

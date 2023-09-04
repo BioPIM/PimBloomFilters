@@ -17,13 +17,45 @@
 #include <memory>
 
 // #define DO_WORKLOAD_PROFILING
-#define DO_TRACE
+// #define DO_TRACE
 
 void __attribute__((optimize(0))) _trace_rank_done() {}
 
-enum DpuProfile {
-    HARDWARE,
-    SIMULATOR,
+/* -------------------------------------------------------------------------- */
+/*                                 DPU profile                                */
+/* -------------------------------------------------------------------------- */
+
+class DpuProfile {
+
+public:
+
+    enum Backend {
+        HARDWARE, // Default
+        SIMULATOR,
+    };
+
+    DpuProfile() : _backend(Backend::HARDWARE) {}
+
+    DpuProfile& set_backend(Backend value) {
+        _backend = value;
+        return *this;
+    }
+
+    std::string get() {
+        std::string profile = "backend=";
+        if (_backend == Backend::HARDWARE) {
+            profile += "hw";
+        } else if (_backend == Backend::HARDWARE) {
+            profile += "simulator";
+        }
+        return profile;
+    }
+
+private:
+
+    Backend _backend;
+
+
 };
 
 
@@ -37,18 +69,19 @@ public:
     
     PimRankSet(size_t nb_ranks,
                size_t nb_threads = 8UL,
-               DpuProfile dpu_profile = DpuProfile::HARDWARE,
-               const char* binary_name = NULL) : _nb_ranks(nb_ranks), _nb_threads(nb_threads) {
+               DpuProfile dpu_profile = DpuProfile(),
+               const std::string binary_name = "") : _nb_ranks(nb_ranks), _nb_threads(nb_threads) {
         
         _sets.resize(_nb_ranks);
         _rank_mutexes = std::vector<std::mutex>(_nb_ranks);
 
         // Alloc in parallel
+        std::string profile = dpu_profile.get();
         #pragma omp parallel for num_threads(_nb_threads)
 		for (size_t rank_id = 0; rank_id < _nb_ranks; rank_id++) {
-			_pim_api.dpu_alloc_ranks(1, _get_dpu_profile(dpu_profile).c_str(), &_sets[rank_id]);
-            if (binary_name != NULL) {
-			    load_binary(binary_name, rank_id);
+			_pim_api.dpu_alloc_ranks(1, profile.c_str(), &_sets[rank_id]);
+            if (!binary_name.empty()) {
+			    load_binary(binary_name.c_str(), rank_id);
             }
 		}
 
@@ -310,16 +343,6 @@ private:
 	std::vector<size_t> _nb_dpu_in_rank;
 
     std::vector<std::mutex> _rank_mutexes;
-
-    std::string _get_dpu_profile(DpuProfile profile) {
-        if (profile == DpuProfile::HARDWARE) {
-            return "backend=hw";
-        } else if (profile == DpuProfile::SIMULATOR) {
-            return "backend=simulator";
-        } else {
-            return "";
-        }
-    }
 
     static inline size_t _get_dpu_uid(size_t rank_id, size_t dpu_id) {
         return rank_id * 100 + dpu_id;

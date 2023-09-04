@@ -54,7 +54,7 @@ TEST_CASE("Testing PIM Bloom filters") {
 	CAPTURE(nb_hash);
 
 	INFO("Creating filter...");
-	auto bloom_filter = std::make_unique<PimBloomFilter<HashPimItemDispatcher>>(bloom_size2, nb_hash, NB_THREADS, nb_ranks, DpuProfile::HARDWARE);
+	auto bloom_filter = std::make_unique<PimBloomFilter<HashPimItemDispatcher>>(bloom_size2, nb_hash, NB_THREADS, nb_ranks);
 
 	INFO("Checking weight after initialization...");
 	size_t weight = bloom_filter->get_weight();
@@ -106,7 +106,7 @@ TEST_CASE("Testing PIM Bloom filters") {
 	CHECK(result[1] == true);
 
 	INFO("Getting data, loading it into a new filter and checking weight remains identical");
-	auto bloom_filter2 = std::make_unique<PimBloomFilter<HashPimItemDispatcher>>(bloom_size2, nb_hash, NB_THREADS, nb_ranks, DpuProfile::HARDWARE);
+	auto bloom_filter2 = std::make_unique<PimBloomFilter<HashPimItemDispatcher>>(bloom_size2, nb_hash, NB_THREADS, nb_ranks);
 	bloom_filter2->set_data(bloom_filter->get_data());
 	CHECK(bloom_filter->get_weight() == bloom_filter2->get_weight());
 

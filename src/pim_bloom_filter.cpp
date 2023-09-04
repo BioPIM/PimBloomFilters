@@ -57,8 +57,8 @@ class PimBloomFilter : public BulkBloomFilter {
 						size_t nb_hash,
 						size_t nb_threads,
 						size_t nb_ranks = 8,
-						DpuProfile dpu_profile = DpuProfile::HARDWARE) : BulkBloomFilter(size2, nb_hash, nb_threads),
-							_pim_rankset(PimRankSet(nb_ranks, nb_threads, dpu_profile, get_dpu_binary_name().c_str())),
+						DpuProfile dpu_profile = DpuProfile()) : BulkBloomFilter(size2, nb_hash, nb_threads),
+							_pim_rankset(PimRankSet(nb_ranks, nb_threads, dpu_profile, std::string(DPU_BINARIES_DIR) + "/bloom_filters_dpu")),
 							_item_dispatcher(HashPimItemDispatcher(_pim_rankset)) {
 
 			static_assert(std::is_base_of<PimDispatcher<uint64_t>, ItemDispatcher>::value, "type parameter of this class must derive from PimDispatcher");
@@ -355,7 +355,7 @@ class PimBloomFilter : public BulkBloomFilter {
 					weight += result;
 					weight_mutex.unlock();
 				});
-			}, true);
+			}, true); // Can execute in parallel
 
 			_pim_rankset.wait_all_ranks_done();
 			return static_cast<size_t>(weight);
@@ -405,10 +405,6 @@ class PimBloomFilter : public BulkBloomFilter {
 		size_t _dpu_size2;
 		HashPimItemDispatcher _item_dispatcher;
 		std::vector<uint8_t> _bloom_data;
-
-		const std::string get_dpu_binary_name() {
-			return std::string(DPU_BINARIES_DIR) + "/bloom_filters_dpu";
-		}
 
 		const size_t _NO_MAPPING = UINT64_MAX;
 

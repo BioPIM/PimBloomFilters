@@ -76,6 +76,7 @@ int main(int argc, char** argv) {
     std::cout << "> Querying non inserted items and checking fpr..." << std::endl;
     auto lookup_result = bloom_filter->contains_bulk(no_items);
 	double fpr = (double) std::count(lookup_result.begin(), lookup_result.end(), true) / no_items.size();
+    last_timeit_measure = fpr; log_timeit("fpr"); // Not very clean but works fine
     std::cout << "False positive rate is " << fpr << std::endl;
 
     // std::cout << "> Getting data..." << std::endl;

@@ -21,6 +21,7 @@
 
 void __attribute__((optimize(0))) _trace_rank_done() {}
 
+
 /* -------------------------------------------------------------------------- */
 /*                                 DPU profile                                */
 /* -------------------------------------------------------------------------- */
@@ -30,31 +31,47 @@ class DpuProfile {
 public:
 
     enum Backend {
-        HARDWARE, // Default
-        SIMULATOR,
+        HARDWARE = 0, // Default
+        SIMULATOR = 1,
     };
 
-    DpuProfile() : _backend(Backend::HARDWARE) {}
+    DpuProfile() {}
 
     DpuProfile& set_backend(Backend value) {
         _backend = value;
         return *this;
     }
 
+    DpuProfile& set_scatter_gather_enabled(bool value) {
+        _enable_sg = value;
+        return *this;
+    }
+
+    DpuProfile& set_scatter_gather_max_blocks_per_dpu(size_t value) {
+        _sg_max_blocks_per_dpu = value;
+        return *this;
+    }
+
     std::string get() {
         std::string profile = "backend=";
-        if (_backend == Backend::HARDWARE) {
-            profile += "hw";
-        } else if (_backend == Backend::HARDWARE) {
-            profile += "simulator";
+        switch (_backend) {
+            case Backend::SIMULATOR:
+                profile += "simulator"; break;
+            default:
+                profile += "hw"; break;
+            }
+        if (_enable_sg) {
+            profile += ", sgXferEnable=true";
+            profile += ", sgXferMaxBlocksPerDpu=" + std::to_string(_sg_max_blocks_per_dpu);
         }
         return profile;
     }
 
 private:
 
-    Backend _backend;
-
+    Backend _backend = Backend::HARDWARE;
+    bool _enable_sg = false;
+    size_t _sg_max_blocks_per_dpu = 64;
 
 };
 
@@ -68,7 +85,7 @@ class PimRankSet {
 public:
     
     PimRankSet(size_t nb_ranks,
-               size_t nb_threads = 8UL,
+               size_t nb_threads = 8,
                DpuProfile dpu_profile = DpuProfile(),
                const std::string binary_name = "") : _nb_ranks(nb_ranks), _nb_threads(nb_threads) {
         

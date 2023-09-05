@@ -19,6 +19,8 @@ class IBloomFilter {
 
     public:
 
+        IBloomFilter() {}
+
         /// @brief Bloom filter data structure
         /// @param size2 power of 2 to use for the size that will be 2^size2
         /// @param nb_hash number of hash functions

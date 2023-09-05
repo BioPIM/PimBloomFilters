@@ -16,8 +16,20 @@
 #include <thread>
 #include <memory>
 
-// #define DO_WORKLOAD_PROFILING
-// #define DO_TRACE
+constexpr bool DO_WORKLOAD_PROFILING = false;
+constexpr bool DO_TRACE = false;
+
+#ifdef LOG_DPU
+constexpr bool DO_LOG_DPU = true;
+#else
+constexpr bool DO_LOG_DPU = false;
+#endif
+
+#ifdef DO_DPU_PERFCOUNTER
+constexpr bool DO_DPU_PERF = true;
+#else
+constexpr bool DO_DPU_PERF = false;
+#endif
 
 void __attribute__((optimize(0))) _trace_rank_done() {}
 
@@ -174,17 +186,17 @@ public:
         _pim_api.dpu_launch(_sets[rank_id], DPU_SYNCHRONOUS);
         wait_rank_done(rank_id);
 
-        #ifdef DO_TRACE
-        _trace_rank_done();
-        #endif
+        if constexpr(DO_TRACE) {
+             _trace_rank_done();
+        }
 
-        #ifdef LOG_DPU
-        _print_dpu_logs(rank_id);
-        #endif
+        if constexpr(DO_LOG_DPU) {
+            _print_dpu_logs(rank_id);
+        }
 
-        #ifdef DO_DPU_PERFCOUNTER
-        _log_perfcounter(rank_id);
-        #endif
+        if constexpr(DO_DPU_PERF) {
+            _log_perfcounter(rank_id);
+        }
     }
 
     /* ------------------------------ Launch async ------------------------------ */
@@ -192,23 +204,23 @@ public:
     void launch_rank_async(size_t rank_id) {
         _pim_api.dpu_launch(_sets[rank_id], DPU_ASYNCHRONOUS);
 
-        #ifdef DO_TRACE
-        add_callback_async(rank_id, []() {
-            _trace_rank_done();
-        });
-        #endif
+        if constexpr(DO_TRACE) {
+            add_callback_async(rank_id, []() {
+                _trace_rank_done();
+            });
+        }
 
-        #ifdef LOG_DPU
-        add_callback_async(rank_id, [this, rank_id]() {
-            _print_dpu_logs(rank_id);
-        });
-        #endif
+        if constexpr(DO_LOG_DPU) {
+            add_callback_async(rank_id, [this, rank_id]() {
+                _print_dpu_logs(rank_id);
+            });
+        }
 
-        #ifdef DO_DPU_PERFCOUNTER
-        add_callback_async(rank_id, [this, rank_id]() {
-            _log_perfcounter(rank_id);
-        });
-        #endif
+        if constexpr(DO_DPU_PERF) {
+            add_callback_async(rank_id, [this, rank_id]() {
+                _log_perfcounter(rank_id);
+            });
+       }
 	}
 
     /* -------------------------------- Callbacks ------------------------------- */
@@ -317,14 +329,14 @@ public:
     /* ---------------------------- Profiling methods --------------------------- */
 
     void start_workload_profiling() {
-        #ifdef DO_WORKLOAD_PROFILING
-        double start = omp_get_wtime();
-        _workload_measures.resize(0);
-        _workload_measures.resize(_nb_ranks, 0.0);
-        _workload_begin.resize(0);
-        _workload_begin.resize(_nb_ranks, start);
-        _do_workload_profiling = true;
-        #endif
+        if constexpr(DO_WORKLOAD_PROFILING) {
+            double start = omp_get_wtime();
+            _workload_measures.resize(0);
+            _workload_measures.resize(_nb_ranks, 0.0);
+            _workload_begin.resize(0);
+            _workload_begin.resize(_nb_ranks, start);
+            _do_workload_profiling = true;
+        }
     }
 
     void end_workload_profiling() {

@@ -10,10 +10,9 @@
 
 #include"bloom_filter.hpp"
 
-// #define DO_WORKLOAD_PROFILING
-
 void __attribute__((optimize(0))) _worker_done() {}
 void __attribute__((optimize(0))) _start_callback() {}
+
 
 /* -------------------------------------------------------------------------- */
 /*                              Item dispatchers                              */
@@ -98,10 +97,10 @@ class PimBloomFilter : public BulkBloomFilter {
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
 			const size_t nb_workers = 6;
 
-			#ifdef DO_WORKLOAD_PROFILING
-			_pim_rankset.start_workload_profiling();
 			std::vector<double> workers_measures(nb_workers);
-			#endif
+			if constexpr(DO_WORKLOAD_PROFILING) {
+				_pim_rankset.start_workload_profiling();
+			}
 			
 			const size_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU;
 			const size_t bucket_size = max_nb_items_per_bucket + 2;
@@ -183,10 +182,10 @@ class PimBloomFilter : public BulkBloomFilter {
 					}
 				}
 
-				#ifdef DO_WORKLOAD_PROFILING
-				workers_measures[worker_id] = omp_get_wtime();
-				_worker_done(); // Call to see on trace when workers are done
-				#endif
+				if constexpr(DO_WORKLOAD_PROFILING) {
+					workers_measures[worker_id] = omp_get_wtime();
+					_worker_done(); // Call to see on trace when workers are done
+				}
 
 				// spdlog::info("Worker {} did {} launches", worker_id, done_container.size());
 				
@@ -194,13 +193,13 @@ class PimBloomFilter : public BulkBloomFilter {
 			
 			_pim_rankset.wait_all_ranks_done();
 
-			#ifdef DO_WORKLOAD_PROFILING
-			double stop = omp_get_wtime();
-			for (size_t worker_id = 0; worker_id < nb_workers; worker_id++) {
-				spdlog::info("Host worker {} had {} seconds of idle time", worker_id, stop - workers_measures[worker_id]);
+			if constexpr(DO_WORKLOAD_PROFILING) {
+				double stop = omp_get_wtime();
+				for (size_t worker_id = 0; worker_id < nb_workers; worker_id++) {
+					spdlog::info("Host worker {} had {} seconds of idle time", worker_id, stop - workers_measures[worker_id]);
+				}
+				_pim_rankset.end_workload_profiling();
 			}
-			_pim_rankset.end_workload_profiling();
-			#endif
 
 		}
 
@@ -210,10 +209,10 @@ class PimBloomFilter : public BulkBloomFilter {
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
 			const size_t nb_workers = 5;
 
-			#ifdef DO_WORKLOAD_PROFILING
-			_pim_rankset.start_workload_profiling();
 			std::vector<double> workers_measures(nb_workers);
-			#endif
+			if constexpr(DO_WORKLOAD_PROFILING) {
+				_pim_rankset.start_workload_profiling();
+			}
 
 			const uint64_t max_nb_items_per_bucket = MAX_NB_ITEMS_PER_DPU;
 			const size_t bucket_size = max_nb_items_per_bucket + 2;
@@ -310,10 +309,10 @@ class PimBloomFilter : public BulkBloomFilter {
 					}
 				}
 
-				#ifdef DO_WORKLOAD_PROFILING
-				workers_measures[worker_id] = omp_get_wtime();
-				_worker_done(); // Call to see on trace when workers are done
-				#endif
+				if constexpr(DO_WORKLOAD_PROFILING) {
+					workers_measures[worker_id] = omp_get_wtime();
+					_worker_done(); // Call to see on trace when workers are done
+				}
 
 				// spdlog::info("Worker {} did {} launches", worker_id, done_container.size());
 				
@@ -328,13 +327,13 @@ class PimBloomFilter : public BulkBloomFilter {
                 result.emplace_back(value);
             }
 
-			#ifdef DO_WORKLOAD_PROFILING
-			double stop = omp_get_wtime();
-			for (size_t worker_id = 0; worker_id < nb_workers; worker_id++) {
-				spdlog::info("Host worker {} had {} seconds of idle time", worker_id, stop - workers_measures[worker_id]);
+			if constexpr(DO_WORKLOAD_PROFILING) {
+				double stop = omp_get_wtime();
+				for (size_t worker_id = 0; worker_id < nb_workers; worker_id++) {
+					spdlog::info("Host worker {} had {} seconds of idle time", worker_id, stop - workers_measures[worker_id]);
+				}
+				_pim_rankset.end_workload_profiling();
 			}
-			_pim_rankset.end_workload_profiling();
-			#endif
 
             return result;
 		}

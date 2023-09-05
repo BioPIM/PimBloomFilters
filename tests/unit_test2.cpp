@@ -9,10 +9,10 @@
 #include "tests_utils.hpp"
 #include "bloom_filter_factory.cpp"
 
-#define NB_THREADS 8
+constexpr size_t NB_THREADS = 8;
 
-#define NB_ITEMS 10000
-#define NB_NO_ITEMS 1000
+constexpr size_t NB_ITEMS = 10000;
+constexpr size_t NB_NO_ITEMS = 1000;
 
 TEST_CASE("Testing standard Bloom filters") {
 

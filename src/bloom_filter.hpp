@@ -57,7 +57,7 @@ class IBloomFilter {
         /// @return vector of lookup results in the same order as the input
         virtual std::vector<bool> contains_bulk(const std::vector<uint64_t>& items) = 0;
 
-        /// @brief Computes the weight of the filter
+        /// @brief Compute the weight of the filter
 		/// @return number of bits set to 1 in the filter
         virtual size_t get_weight() = 0;
 
@@ -69,6 +69,8 @@ class IBloomFilter {
         /// @param data representation of the filter (must be obtained through get_data() to be valid)
         virtual void set_data(const std::vector<uint8_t>& data) = 0;
 
+        /// @brief Get the number of hash functions used by the filter
+        /// @return number of hash functions
         size_t get_nb_hash() { return _nb_hash; }
 
     protected:

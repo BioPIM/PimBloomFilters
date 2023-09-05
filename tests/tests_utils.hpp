@@ -5,10 +5,16 @@
 #include <cstdint>
 #include <cstdio>
 
+
+/* -------------------------------------------------------------------------- */
+/*                              Items generation                              */
+/* -------------------------------------------------------------------------- */
+
 std::vector<uint64_t> get_seq_items(const size_t nb, const uint64_t start_offset = 0) {
-    std::vector<uint64_t> items(nb);
+    std::vector<uint64_t> items;
+    items.reserve(nb);
 	for (size_t i = 0; i < nb; i++) {
-		items[i] = i + start_offset;
+		items.emplace_back(i + start_offset);
 	}
     return items;
 }

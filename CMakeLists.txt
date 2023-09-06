@@ -14,6 +14,7 @@ set(LIB_NAME "BloomFilters")
 
 # set(CMAKE_BUILD_TYPE Debug)
 set(CMAKE_BUILD_TYPE Release)
+# set(CMAKE_BUILD_TYPE RelWithDebInfo)
 
 set(TASKLETS "16")
 

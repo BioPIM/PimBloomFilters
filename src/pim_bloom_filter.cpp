@@ -10,8 +10,9 @@
 
 #include"bloom_filter.hpp"
 
-void __attribute__((optimize(0))) _worker_done() {}
-void __attribute__((optimize(0))) _start_callback() {}
+void __attribute__((optimize(0))) __worker_done() {}
+void __attribute__((optimize(0))) __method_start() {}
+void __attribute__((optimize(0))) __method_end() {}
 
 
 /* -------------------------------------------------------------------------- */
@@ -62,6 +63,8 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			static_assert(std::is_base_of<PimDispatcher<uint64_t>, ItemDispatcher>::value, "type parameter of this class must derive from PimDispatcher");
 
+			if constexpr(DO_TRACE) { __method_start(); }
+
 			if (nb_ranks < 1) {
 				throw std::invalid_argument(std::string("Error: number of DPUs ranks must be >= 1"));
 			}
@@ -89,16 +92,21 @@ class PimBloomFilter : public BulkBloomFilter {
 				_pim_rankset.launch_rank_sync(rank_id);
 			}, true);
 
+			if constexpr(DO_TRACE) { __method_end(); }
+
 		}
 
 		void insert_bulk(const std::vector<uint64_t>& items) override {
+
+			if constexpr(DO_TRACE) { __method_start(); }
 
 			const size_t nb_items = items.size();
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
 			const size_t nb_workers = 6;
 
-			std::vector<double> workers_measures(nb_workers);
+			std::vector<double> workers_measures;
 			if constexpr(DO_WORKLOAD_PROFILING) {
+				workers_measures.resize(nb_workers);
 				_pim_rankset.start_workload_profiling();
 			}
 			
@@ -182,10 +190,8 @@ class PimBloomFilter : public BulkBloomFilter {
 					}
 				}
 
-				if constexpr(DO_WORKLOAD_PROFILING) {
-					workers_measures[worker_id] = omp_get_wtime();
-					_worker_done(); // Call to see on trace when workers are done
-				}
+				if constexpr(DO_WORKLOAD_PROFILING) { workers_measures[worker_id] = omp_get_wtime(); }
+				if constexpr(DO_TRACE) { __worker_done(); }
 
 				// spdlog::info("Worker {} did {} launches", worker_id, done_container.size());
 				
@@ -201,16 +207,21 @@ class PimBloomFilter : public BulkBloomFilter {
 				_pim_rankset.end_workload_profiling();
 			}
 
+			if constexpr(DO_TRACE) { __method_end(); }
+
 		}
 
 		std::vector<bool> contains_bulk(const std::vector<uint64_t>& items) override {
+
+			if constexpr(DO_TRACE) { __method_start(); }
 
 			const size_t nb_items = items.size();
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
 			const size_t nb_workers = 5;
 
-			std::vector<double> workers_measures(nb_workers);
+			std::vector<double> workers_measures;
 			if constexpr(DO_WORKLOAD_PROFILING) {
+				workers_measures.resize(nb_workers);
 				_pim_rankset.start_workload_profiling();
 			}
 
@@ -309,10 +320,8 @@ class PimBloomFilter : public BulkBloomFilter {
 					}
 				}
 
-				if constexpr(DO_WORKLOAD_PROFILING) {
-					workers_measures[worker_id] = omp_get_wtime();
-					_worker_done(); // Call to see on trace when workers are done
-				}
+				if constexpr(DO_WORKLOAD_PROFILING) { workers_measures[worker_id] = omp_get_wtime(); }
+				if constexpr(DO_TRACE) { __worker_done(); }
 
 				// spdlog::info("Worker {} did {} launches", worker_id, done_container.size());
 				
@@ -335,10 +344,14 @@ class PimBloomFilter : public BulkBloomFilter {
 				_pim_rankset.end_workload_profiling();
 			}
 
+			if constexpr(DO_TRACE) { __method_end(); }
+
             return result;
 		}
 
 		size_t get_weight() override {
+
+			if constexpr(DO_TRACE) { __method_start(); }
 
 			uint64_t weight = 0;
 			std::mutex weight_mutex;
@@ -357,6 +370,9 @@ class PimBloomFilter : public BulkBloomFilter {
 			}, true); // Can execute in parallel
 
 			_pim_rankset.wait_all_ranks_done();
+
+			if constexpr(DO_TRACE) { __method_end(); }
+
 			return static_cast<size_t>(weight);
 
 		}
@@ -431,7 +447,6 @@ class PimBloomFilter : public BulkBloomFilter {
 			});
 			_pim_rankset.launch_rank_async(rank_id);
 			_pim_rankset.add_callback_async(rank_id, [&indexes_buckets, bucket_length, &lookup_results, this, rank_id]() { // Get results
-				// _start_callback();
 				// double start = omp_get_wtime();
 				auto rank_results = _pim_rankset.get_vec_data_from_rank_sync<uint64_t>(rank_id, "args", 0, bucket_length);
 				// double stop = omp_get_wtime();
@@ -447,7 +462,6 @@ class PimBloomFilter : public BulkBloomFilter {
 				indexes_buckets.clear(); // Slightly faster to clear memory as soon as possible
 				// stop = omp_get_wtime();
 				// spdlog::info("Writing results took {}", stop - start);
-				// _start_callback();
 			});
 
 			_pim_rankset.unlock_rank(rank_id);

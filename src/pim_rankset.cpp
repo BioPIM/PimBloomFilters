@@ -31,7 +31,8 @@ constexpr bool DO_DPU_PERF = true;
 constexpr bool DO_DPU_PERF = false;
 #endif
 
-void __attribute__((optimize(0))) _trace_rank_done() {}
+void __attribute__((optimize(0))) __run_done() {}
+void __attribute__((optimize(0))) __callback_done() {}
 
 
 /* -------------------------------------------------------------------------- */
@@ -186,17 +187,9 @@ public:
         _pim_api.dpu_launch(_sets[rank_id], DPU_SYNCHRONOUS);
         wait_rank_done(rank_id);
 
-        if constexpr(DO_TRACE) {
-             _trace_rank_done();
-        }
-
-        if constexpr(DO_LOG_DPU) {
-            _print_dpu_logs(rank_id);
-        }
-
-        if constexpr(DO_DPU_PERF) {
-            _log_perfcounter(rank_id);
-        }
+        if constexpr(DO_TRACE) { __run_done(); }
+        if constexpr(DO_LOG_DPU) { _print_dpu_logs(rank_id); }
+        if constexpr(DO_DPU_PERF) { _log_perfcounter(rank_id); }
     }
 
     /* ------------------------------ Launch async ------------------------------ */
@@ -206,7 +199,7 @@ public:
 
         if constexpr(DO_TRACE) {
             add_callback_async(rank_id, []() {
-                _trace_rank_done();
+                __run_done();
             });
         }
 
@@ -389,6 +382,7 @@ private:
         auto func = static_cast<std::function<void (void)>*>(arg);
         (*func)();
         delete func;
+        if constexpr(DO_TRACE) { __callback_done(); }
         return DPU_OK;
     }
 

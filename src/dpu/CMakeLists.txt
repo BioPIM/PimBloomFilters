@@ -4,9 +4,9 @@ set(STACK_SIZE "3072")
 
 foreach(TARGET ${TARGETS})
 
-    add_executable(${TARGET} ${TARGET}.c murmur3.c)
+    add_executable(${TARGET} ${TARGET}.cpp murmur3.c)
 
-    target_compile_options(${TARGET} PRIVATE --target=dpu-upmem-dpurte)
+    target_compile_options(${TARGET} PRIVATE --target=dpu-upmem-dpurte -fno-exceptions -fno-rtti)
     target_link_options(${TARGET} PRIVATE --target=dpu-upmem-dpurte)
     target_compile_definitions(${TARGET} PRIVATE
         NR_TASKLETS=${TASKLETS}

@@ -1,14 +1,20 @@
-#include <stdint.h>
-#include <defs.h>
-#include <perfcounter.h>
-#include <mram.h>
-#include <mram_unaligned.h>
-#include <barrier.h>
-#include <mutex_pool.h>
-#include <string.h>
+#define _Bool bool
+#define size_t uint32_t
+	
+extern "C" {
+	
+	#include <stdint.h>
+	#include <defs.h>
+	#include <perfcounter.h>
+	#include <mram.h>
+	#include <mram_unaligned.h>
+	#include <barrier.h>
+	#include <mutex_pool.h>
+
+	#include "murmur3.h"
+}
 
 #include "bloom_filters_dpu.h"
-#include "murmur3.h"
 
 
 /* -------------------------------------------------------------------------- */
@@ -18,10 +24,6 @@
 #define CACHE8_SIZE 2048
 #define CACHE64_SIZE (CACHE8_SIZE >> 3)
 #define BLOCK_MODULO 4095 // Must be (CACHE8_BLOOM_SIZE * 8) - 1
-
-// Barriers to sync tasklets
-BARRIER_INIT(all_tasklets_barrier_1, NR_TASKLETS);
-BARRIER_INIT(all_tasklets_barrier_2, NR_TASKLETS);
 
 MUTEX_POOL_INIT(write_mutex, NR_TASKLETS);
 
@@ -211,15 +213,32 @@ int main() {
 			// }
 			
 			if (me() == 0) {
-				gcache64[0] = _nb_items; // Write number of items in the result because the host will need it
+				// gcache64[0] = _nb_items; // Write number of items in the result because the host will need it
+				args[0] = _nb_items; // Write number of items in the result because the host will need it
 			}
 			size_t cache_idx = 2;
 			size_t current_start_idx = 0;
+			size_t result_write_idx = 1;
 			for (size_t i = 0; i < _nb_items; i++) {
 				if (cache_idx == CACHE64_SIZE) {
 					barrier_wait(&all_tasklets_barrier_1); // Wait, the result needs to be written
 					if (me() == 0) {
-						mram_write(gcache64, &args[current_start_idx], CACHE64_SIZE * sizeof(uint64_t));
+						
+						for (size_t l = 0; l < 4; l++) {
+							size_t s_idx = l * 64;
+							uint64_t value = 0;
+							uint64_t bit = 1;
+							for (size_t k = 0; k < 64; k++) {
+								if (gcache64[s_idx + k]) {
+									value += bit;
+								}
+								bit = (bit << 1);
+							}
+							args[result_write_idx + l] = value;
+						}
+						result_write_idx += 4;
+
+						// mram_write(gcache64, &args[current_start_idx], CACHE64_SIZE * sizeof(uint64_t));
 					}
 					barrier_wait(&all_tasklets_barrier_2); // Can go again after that
 					current_start_idx += CACHE64_SIZE;
@@ -244,7 +263,19 @@ int main() {
 			}
 			barrier_wait(&all_tasklets_barrier_1);
 			if (me() == 0) {
-				mram_write(gcache64, &args[current_start_idx], CACHE64_SIZE * sizeof(uint64_t)); // Write last part
+				for (size_t l = 0; l < 4; l++) {
+					size_t s_idx = l * 64;
+					uint64_t value = 0;
+					uint64_t bit = 1;
+					for (size_t k = 0; k < 64; k++) {
+						if (gcache64[s_idx + k]) {
+							value += bit;
+						}
+						bit = (bit << 1);
+					}
+					args[result_write_idx + l] = value;
+				}
+				// mram_write(gcache64, &args[current_start_idx], CACHE64_SIZE * sizeof(uint64_t)); // Write last part
 			}
 			break;
 		}

@@ -9,7 +9,9 @@ find_package(spdlog REQUIRED)
 #                      Compile DPU binaries                      
 # ------------------------------------------------------------------------------
 
+set(CMAKE_CXX_COMPILER "/usr/bin/clang") # Clang needed for DPU
 add_subdirectory(dpu)
+set(CMAKE_CXX_COMPILER ${CPP_HOST_COMPILER})
 
 # ------------------------------------------------------------------------------
 #                            Retrieve some DPU info                             

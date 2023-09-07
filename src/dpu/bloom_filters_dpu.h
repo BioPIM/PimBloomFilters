@@ -5,6 +5,10 @@
 #include "pim_bloom_filter_common.h"
 #include "dpu_utils.h"
 
+// Barriers to sync tasklets
+BARRIER_INIT(all_tasklets_barrier_1, NR_TASKLETS);
+BARRIER_INIT(all_tasklets_barrier_2, NR_TASKLETS);
+
 const uint8_t bit_mask[8] = {
     0x01,  //00000001
     0x02,  //00000010

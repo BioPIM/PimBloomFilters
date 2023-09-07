@@ -10,7 +10,8 @@
 
 #include"bloom_filter.hpp"
 
-void __attribute__((optimize(0))) __worker_done() {}
+constexpr bool DO_TRACE = true;
+
 void __attribute__((optimize(0))) __method_start() {}
 void __attribute__((optimize(0))) __method_end() {}
 
@@ -191,7 +192,6 @@ class PimBloomFilter : public BulkBloomFilter {
 				}
 
 				if constexpr(DO_WORKLOAD_PROFILING) { workers_measures[worker_id] = omp_get_wtime(); }
-				if constexpr(DO_TRACE) { __worker_done(); }
 
 				// spdlog::info("Worker {} did {} launches", worker_id, done_container.size());
 				
@@ -217,7 +217,7 @@ class PimBloomFilter : public BulkBloomFilter {
 
 			const size_t nb_items = items.size();
 			const size_t nb_ranks = _pim_rankset.get_nb_ranks();
-			const size_t nb_workers = 5;
+			const size_t nb_workers = 6;
 
 			std::vector<double> workers_measures;
 			if constexpr(DO_WORKLOAD_PROFILING) {
@@ -321,7 +321,6 @@ class PimBloomFilter : public BulkBloomFilter {
 				}
 
 				if constexpr(DO_WORKLOAD_PROFILING) { workers_measures[worker_id] = omp_get_wtime(); }
-				if constexpr(DO_TRACE) { __worker_done(); }
 
 				// spdlog::info("Worker {} did {} launches", worker_id, done_container.size());
 				
@@ -448,15 +447,24 @@ class PimBloomFilter : public BulkBloomFilter {
 			_pim_rankset.launch_rank_async(rank_id);
 			_pim_rankset.add_callback_async(rank_id, [&indexes_buckets, bucket_length, &lookup_results, this, rank_id]() { // Get results
 				// double start = omp_get_wtime();
-				auto rank_results = _pim_rankset.get_vec_data_from_rank_sync<uint64_t>(rank_id, "args", 0, bucket_length);
+				auto rank_results = _pim_rankset.get_vec_data_from_rank_sync<uint64_t>(rank_id, "args", 0, bucket_length / 64);
 				// double stop = omp_get_wtime();
 				// spdlog::info("Transfer took {}", stop - start);
 				// start = omp_get_wtime();
 				for (size_t dpu_id = 0; dpu_id < indexes_buckets.size(); dpu_id++) {
 					auto &indexes_bucket = indexes_buckets[dpu_id];
 					auto &bucket_results = rank_results[dpu_id];
+					size_t bit_idx = 2, cell_idx = 1;
+					uint64_t bit = 4;
 					for (size_t i = 0; i < bucket_results[0]; i++) {
-						lookup_results[indexes_bucket[i]] = bucket_results[i + 2];
+						lookup_results[indexes_bucket[i]] = (bucket_results[cell_idx] & bit) > 0;
+						bit_idx++;
+						bit = (bit << 1);
+						if (bit_idx == 64) {
+							cell_idx++;
+							bit = 1;
+							bit_idx = 0;
+						}
 					}
 				}
 				indexes_buckets.clear(); // Slightly faster to clear memory as soon as possible

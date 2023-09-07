@@ -1,7 +1,7 @@
 #ifndef CD6575B7_00CE_4AC1_968C_A1BDEAE2E188
 #define CD6575B7_00CE_4AC1_968C_A1BDEAE2E188
 
-#include "pim_common.h"
+#include "pim_common.hpp"
 
 #define CEIL8(x) ((((x) + 7) >> 3) << 3)
 

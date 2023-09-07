@@ -1,7 +1,7 @@
 #ifndef F347470E_1730_41E9_9AE3_45A884CD2BFF
 #define F347470E_1730_41E9_9AE3_45A884CD2BFF
 
-#include "pim_common.h"
+#include "pim_common.hpp"
 #include "pim_api.hpp"
 #include "spdlog/spdlog.h"
 
@@ -17,7 +17,6 @@
 #include <memory>
 
 constexpr bool DO_WORKLOAD_PROFILING = false;
-constexpr bool DO_TRACE = false;
 
 #ifdef LOG_DPU
 constexpr bool DO_LOG_DPU = true;
@@ -30,9 +29,6 @@ constexpr bool DO_DPU_PERF = true;
 #else
 constexpr bool DO_DPU_PERF = false;
 #endif
-
-void __attribute__((optimize(0))) __run_done() {}
-void __attribute__((optimize(0))) __callback_done() {}
 
 
 /* -------------------------------------------------------------------------- */
@@ -187,7 +183,6 @@ public:
         _pim_api.dpu_launch(_sets[rank_id], DPU_SYNCHRONOUS);
         wait_rank_done(rank_id);
 
-        if constexpr(DO_TRACE) { __run_done(); }
         if constexpr(DO_LOG_DPU) { _print_dpu_logs(rank_id); }
         if constexpr(DO_DPU_PERF) { _log_perfcounter(rank_id); }
     }
@@ -196,12 +191,6 @@ public:
 
     void launch_rank_async(size_t rank_id) {
         _pim_api.dpu_launch(_sets[rank_id], DPU_ASYNCHRONOUS);
-
-        if constexpr(DO_TRACE) {
-            add_callback_async(rank_id, []() {
-                __run_done();
-            });
-        }
 
         if constexpr(DO_LOG_DPU) {
             add_callback_async(rank_id, [this, rank_id]() {
@@ -319,6 +308,24 @@ public:
         return buffer;
     }
 
+    template<typename T>
+    void emplace_vec_data_from_rank_sync(size_t rank_id, const char* symbol_name, uint32_t symbol_offset, size_t length, std::vector<std::vector<T>>& buffer) {
+        buffer.resize(get_nb_dpu_in_rank(rank_id));
+        struct dpu_set_t _it_dpu = dpu_set_t{};
+	    uint32_t _it_dpu_idx = 0;
+        DPU_FOREACH(_sets[rank_id], _it_dpu, _it_dpu_idx) {
+            /* ------------------------------- BEGIN HACK ------------------------------- */
+            // This is much faster to reserve than resize because nothing is initialized
+            // The transfer will set the data
+            // BUT the vectors are "officially" empty so cannot iterate on it or use size()
+            // Can access with [] but be careful with the index!
+            buffer[_it_dpu_idx].reserve(length);
+            /* -------------------------------- END HACK -------------------------------- */
+            _pim_api.dpu_prepare_xfer(_it_dpu, buffer[_it_dpu_idx].data());
+        }
+        _pim_api.dpu_push_xfer(_sets[rank_id], DPU_XFER_FROM_DPU, symbol_name, symbol_offset, length, DPU_XFER_DEFAULT);
+    }
+
     /* ---------------------------- Profiling methods --------------------------- */
 
     void start_workload_profiling() {
@@ -382,7 +389,6 @@ private:
         auto func = static_cast<std::function<void (void)>*>(arg);
         (*func)();
         delete func;
-        if constexpr(DO_TRACE) { __callback_done(); }
         return DPU_OK;
     }
 

@@ -2,8 +2,10 @@ cmake_minimum_required(VERSION 3.13)
 
 project(BloomFilters VERSION 0.1 LANGUAGES C CXX DESCRIPTION "Bloom filters on CPU and UPMEM PIM architectures")
 
+set(CPP_HOST_COMPILER "/usr/bin/g++")
+
 set(CMAKE_C_COMPILER "/usr/bin/clang")
-set(CMAKE_CXX_COMPILER "/usr/bin/g++")
+set(CMAKE_CXX_COMPILER ${CPP_HOST_COMPILER})
 
 set(CMAKE_CXX_STANDARD 17)
 set(LIB_NAME "BloomFilters")
@@ -45,9 +47,3 @@ set(UTILITY_SCRIPTS dtrace.sh run_bench1_perfs.sh run_bench2_perfs.sh)
 foreach(SCRIPT ${UTILITY_SCRIPTS})
     configure_file(${SCRIPT} ${SCRIPT} COPYONLY)
 endforeach(SCRIPT ${UTILITY_SCRIPTS})
-
-# ------------------------------------------------------------------------------
-#                                Final cleaning                                 
-# ------------------------------------------------------------------------------
-
-unset(LOG_DPU CACHE)

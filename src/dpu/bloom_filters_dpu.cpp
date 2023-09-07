@@ -23,6 +23,7 @@ extern "C" {
 
 #define CACHE8_SIZE 2048
 #define CACHE64_SIZE (CACHE8_SIZE >> 3)
+#define CACHE64_SIZE_COMPRESSED (CACHE64_SIZE >> 6) // divide by 64
 #define BLOCK_MODULO 4095 // Must be (CACHE8_BLOOM_SIZE * 8) - 1
 
 MUTEX_POOL_INIT(write_mutex, NR_TASKLETS);
@@ -213,7 +214,6 @@ int main() {
 			// }
 			
 			if (me() == 0) {
-				// gcache64[0] = _nb_items; // Write number of items in the result because the host will need it
 				args[0] = _nb_items; // Write number of items in the result because the host will need it
 			}
 			size_t cache_idx = 2;
@@ -223,9 +223,8 @@ int main() {
 				if (cache_idx == CACHE64_SIZE) {
 					barrier_wait(&all_tasklets_barrier_1); // Wait, the result needs to be written
 					if (me() == 0) {
-						
-						for (size_t l = 0; l < 4; l++) {
-							size_t s_idx = l * 64;
+						size_t s_idx = 0;
+						for (size_t l = 0; l < CACHE64_SIZE_COMPRESSED; l++) {
 							uint64_t value = 0;
 							uint64_t bit = 1;
 							for (size_t k = 0; k < 64; k++) {
@@ -234,11 +233,11 @@ int main() {
 								}
 								bit = (bit << 1);
 							}
-							args[result_write_idx + l] = value;
+							gcache64[l] = value;
+							s_idx += 64;
 						}
-						result_write_idx += 4;
-
-						// mram_write(gcache64, &args[current_start_idx], CACHE64_SIZE * sizeof(uint64_t));
+						mram_write(gcache64, &args[result_write_idx], CACHE64_SIZE_COMPRESSED * sizeof(uint64_t));
+						result_write_idx += CACHE64_SIZE_COMPRESSED;
 					}
 					barrier_wait(&all_tasklets_barrier_2); // Can go again after that
 					current_start_idx += CACHE64_SIZE;
@@ -263,8 +262,8 @@ int main() {
 			}
 			barrier_wait(&all_tasklets_barrier_1);
 			if (me() == 0) {
-				for (size_t l = 0; l < 4; l++) {
-					size_t s_idx = l * 64;
+				size_t s_idx = 0;
+				for (size_t l = 0; l < CACHE64_SIZE_COMPRESSED; l++) {
 					uint64_t value = 0;
 					uint64_t bit = 1;
 					for (size_t k = 0; k < 64; k++) {
@@ -273,9 +272,10 @@ int main() {
 						}
 						bit = (bit << 1);
 					}
-					args[result_write_idx + l] = value;
+					gcache64[l] = value;
+					s_idx += 64;
 				}
-				// mram_write(gcache64, &args[current_start_idx], CACHE64_SIZE * sizeof(uint64_t)); // Write last part
+				mram_write(gcache64, &args[result_write_idx], CACHE64_SIZE_COMPRESSED * sizeof(uint64_t));
 			}
 			break;
 		}

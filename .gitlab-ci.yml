@@ -30,3 +30,7 @@ build-job:       # This job runs in the build stage, which runs first.
     - ./tests/unit_test2
   tags:
     - biopim
+
+rules:
+  only:
+    - web

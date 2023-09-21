@@ -39,5 +39,5 @@ build-job:       # This job runs in the build stage, which runs first.
       - build/unit_test2.xml
     reports:
       junit:
-        - unit_test1.xml
-        - unit_test2.xml
+        - build/unit_test1.xml
+        - build/unit_test2.xml

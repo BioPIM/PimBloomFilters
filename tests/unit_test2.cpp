@@ -16,7 +16,7 @@ constexpr size_t NB_NO_ITEMS = 1000;
 
 TEST_CASE("Testing standard Bloom filters") {
 
-	spdlog::set_level(spdlog::level::debug);
+	spdlog::set_level(spdlog::level::err);
 
 	std::vector<uint64_t> items = get_seq_items(NB_ITEMS);
 	std::vector<uint64_t> no_items = get_seq_items(NB_NO_ITEMS, NB_ITEMS);
